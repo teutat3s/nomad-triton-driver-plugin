@@ -1,12 +1,11 @@
-package hello
+package triton
 
 import (
-	"context"
 	"strconv"
 	"sync"
 	"time"
 
-	"github.com/hashicorp/go-hclog"
+	hclog "github.com/hashicorp/go-hclog"
 	"github.com/hashicorp/go-plugin"
 	"github.com/hashicorp/nomad/drivers/shared/executor"
 	"github.com/hashicorp/nomad/plugins/drivers"
@@ -28,13 +27,18 @@ type taskHandle struct {
 	completedAt  time.Time
 	exitResult   *drivers.ExitResult
 
-	// TODO: add any extra relevant information about the task.
-	pid int
+	// extra relevant information about the task.
+	tth        *TritonTaskHandler
+	tritonTask *TritonTask
+	waitCh     chan struct{}
 }
 
 func (h *taskHandle) TaskStatus() *drivers.TaskStatus {
 	h.stateLock.RLock()
 	defer h.stateLock.RUnlock()
+
+	h.logger.Info("InsideTaskStatus")
+	h.logger.Info("W00T", h.tritonTask.Instance.Brand)
 
 	return &drivers.TaskStatus{
 		ID:          h.taskConfig.ID,
@@ -44,7 +48,14 @@ func (h *taskHandle) TaskStatus() *drivers.TaskStatus {
 		CompletedAt: h.completedAt,
 		ExitResult:  h.exitResult,
 		DriverAttributes: map[string]string{
-			"pid": strconv.Itoa(h.pid),
+			"Brand":           h.tritonTask.Instance.Brand,
+			"ComputeNode":     h.tritonTask.Instance.ComputeNode,
+			"FirewallEnabled": strconv.FormatBool(h.tritonTask.Instance.FirewallEnabled),
+			"Image":           h.tritonTask.Instance.Image,
+			"Nname":           h.tritonTask.Instance.Name,
+			"Package":         h.tritonTask.Instance.Package,
+			"PrimaryIP":       h.tritonTask.Instance.PrimaryIP,
+			"Type":            h.tritonTask.Instance.Type,
 		},
 	}
 }
@@ -62,19 +73,19 @@ func (h *taskHandle) run() {
 	}
 	h.stateLock.Unlock()
 
-	// TODO: wait for your task to complete and upate its state.
-	ps, err := h.exec.Wait(context.Background())
+	// wait for your task to complete and upate its state.
+	defer close(h.waitCh)
+
+	h.logger.Info("in the run loop")
+	//h.logger.Info(fmt.Sprintln(h.TaskStatus()))
+
+	h.tth.GetInstStatus(h.tritonTask)
+
+	h.logger.Info("returned from instStatus")
+
 	h.stateLock.Lock()
 	defer h.stateLock.Unlock()
 
-	if err != nil {
-		h.exitResult.Err = err
-		h.procState = drivers.TaskStateUnknown
-		h.completedAt = time.Now()
-		return
-	}
 	h.procState = drivers.TaskStateExited
-	h.exitResult.ExitCode = ps.ExitCode
-	h.exitResult.Signal = ps.Signal
-	h.completedAt = ps.Time
+	h.completedAt = time.Now()
 }

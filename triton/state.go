@@ -1,4 +1,4 @@
-package hello
+package triton
 
 import (
 	"sync"

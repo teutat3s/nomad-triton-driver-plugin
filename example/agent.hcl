@@ -1,7 +1,6 @@
 log_level = "TRACE"
 
-plugin "hello-driver" {
+plugin "triton-driver" {
   config {
-    shell = "bash"
   }
 }

@@ -4,10 +4,10 @@ job "example" {
 
   group "example" {
     task "hello-world" {
-      driver = "hello-world-example"
+      driver = "triton"
 
       config {
-        greeting = "hello"
+        
       }
     }
   }
