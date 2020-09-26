@@ -14,7 +14,7 @@ import (
 )
 
 // Client represents all internally accessible Triton APIs utilized by this
-// provider and the configuration necessary to connect to them.
+// driver and the configuration necessary to connect to them.
 type Client struct {
 	Config                *triton.ClientConfig
 	InsecureSkipTLSVerify bool
