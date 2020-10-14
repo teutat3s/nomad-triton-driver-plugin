@@ -60,6 +60,6 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
-          asset_path: ./$TAR_FILE_NAME.xz
+          asset_path: ./${{ env.TAR_FILE_NAME }}.xz
           asset_name: nomad-triton-driver-plugin_alpine-${{ needs.prepare.outputs.tag }}.tar.xz
           asset_content_type: application/x-xz
