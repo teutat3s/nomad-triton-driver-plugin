@@ -45,8 +45,8 @@ jobs:
       env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-          tag_name: ${{ prepare.outputs.tag }}
-          release_name: Release ${{ prepare.outputs.tag }}
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          release_name: Release ${{ needs.prepare.outputs.tag }}
           body: |
             SHA256 checksum
             ${{ steps.build-driver.outputs.shasum }} $TAR_FILE_NAME.xz
