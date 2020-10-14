@@ -1,4 +1,4 @@
-name: Build triton-driver on alpine linux
+name: Build triton-driver binary on alpine linux and release it
 
 on:
   create:
@@ -6,43 +6,52 @@ on:
 
 jobs:
   prepare:
-          name: Create Release
-          runs-on: ubuntu-latest
-          outputs:
-              upload_url: ${{ steps.create_release.outputs.upload_url }}
-              tag: ${{ steps.build_tag.outputs.tag }}
-          steps:
-              - name: Create Release
-                id: create_release
-                uses: actions/create-release@v1
-                env:
-                    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-                with:
-                    tag_name: ${{ github.ref }}
-                    release_name: Release ${{ github.ref }}
-                    draft: false
-                    prerelease: false
+    name: Format Release Tag
+    runs-on: ubuntu-latest
+    outputs:
+        tag: ${{ steps.release_tag.outputs.tag }}
+    steps:
+        - name: Create Formatted Release Tag
+          id: release_tag
+          run: echo ::set-output name=tag::$(echo ${GITHUB_REF:10})
 
   build:
     needs: prepare
     name: Build on alpine
     runs-on: ubuntu-latest
+    env:
+      TAR_FILE_NAME: nomad-triton-driver-plugin_alpine.tar
     steps:
 
     - name: Check out code into the Go module directory
       uses: actions/checkout@v2
 
-    - name: Build go plugin binary
+    - name: Build go driver binary
+      id: build-driver
       run: |
         set -xe
-        tar=nomad-triton-driver-plugin_alpine.tar
         tag=release:$$
         docker build --tag $tag .
         container=$(docker create $tag)
-        docker cp $container:/root/go/bin/triton-driver - > $tar
+        docker cp $container:/root/nomad-triton-driver-plugin/triton-driver - > $TAR_FILE_NAME
         docker rm $container
         docker rmi $tag
-        xz $tar
+        xz $TAR_FILE_NAME
+        echo ::set-output name=shasum::$(sha256sum $TAR_FILE_NAME.xz)
+
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+          tag_name: ${{ prepare.outputs.tag }}
+          release_name: Release ${{ prepare.outputs.tag }}
+          body: |
+            SHA256 checksum
+            ${{ steps.build-driver.outputs.shasum }} $TAR_FILE_NAME.xz
+          draft: false
+          prerelease: false
 
     - name: Upload Release Asset
       id: upload_release_asset
@@ -50,7 +59,7 @@ jobs:
       env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-          upload_url: ${{ needs.prepare.outputs.upload_url }}
-          asset_path: ./nomad-triton-driver-plugin_alpine.tar.xz
+          upload_url: ${{ needs.steps.create_release.outputs.upload_url }}
+          asset_path: ./$TAR_FILE_NAME.xz
           asset_name: nomad-triton-driver-plugin_alpine-${{ needs.prepare.outputs.tag }}.tar.xz
           asset_content_type: application/x-xz
