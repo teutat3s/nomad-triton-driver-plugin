@@ -1,6 +1,6 @@
 FROM alpine:latest
 
-RUN apk add git go linux-headers gmake
+RUN apk add git go linux-headers make
 
 WORKDIR /root
 
