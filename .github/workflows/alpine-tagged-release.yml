@@ -1,0 +1,56 @@
+name: Build triton-driver on alpine linux
+
+on:
+  create:
+    branches: [ master ]
+
+jobs:
+  prepare:
+          name: Create Release
+          runs-on: ubuntu-latest
+          outputs:
+              upload_url: ${{ steps.create_release.outputs.upload_url }}
+              tag: ${{ steps.build_tag.outputs.tag }}
+          steps:
+              - name: Create Release
+                id: create_release
+                uses: actions/create-release@v1
+                env:
+                    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+                with:
+                    tag_name: ${{ github.ref }}
+                    release_name: Release ${{ github.ref }}
+                    draft: false
+                    prerelease: false
+
+  build:
+    needs: prepare
+    name: Build on alpine
+    runs-on: ubuntu-latest
+    steps:
+
+    - name: Check out code into the Go module directory
+      uses: actions/checkout@v2
+
+    - name: Build go plugin binary
+      run: |
+        set -xe
+        tar=nomad-triton-driver-plugin_alpine.tar
+        tag=release:$$
+        docker build --tag $tag .
+        container=$(docker create $tag)
+        docker cp $container:/root/go/bin/triton-driver - > $tar
+        docker rm $container
+        docker rmi $tag
+        xz $tar
+
+    - name: Upload Release Asset
+      id: upload_release_asset
+      uses: actions/upload-release-asset@v1
+      env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+          upload_url: ${{ needs.prepare.outputs.upload_url }}
+          asset_path: ./nomad-triton-driver-plugin_alpine.tar.xz
+          asset_name: nomad-triton-driver-plugin_alpine-${{ needs.prepare.outputs.tag }}.tar.xz
+          asset_content_type: application/x-xz
