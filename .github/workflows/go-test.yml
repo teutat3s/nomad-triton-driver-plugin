@@ -1,4 +1,4 @@
-name: Go
+name: Go tests
 
 on:
   push:
@@ -9,7 +9,7 @@ on:
 jobs:
 
   build:
-    name: Test
+    name: Run Go tests
     runs-on: ubuntu-latest
     steps:
 
