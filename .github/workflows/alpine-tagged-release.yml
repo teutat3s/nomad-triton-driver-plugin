@@ -39,7 +39,7 @@ jobs:
         docker rm $container
         docker rmi $tag
         xz $TAR_FILE_NAME
-        echo shasum_long=$(sha256sum $XZ_FILE_NAME)
+        shasum_long=$(sha256sum $XZ_FILE_NAME)
         echo ::set-output name=shasum::$(echo ${shasum_long:0:64})
 
     - name: Create Release
