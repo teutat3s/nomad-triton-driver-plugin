@@ -51,7 +51,7 @@ jobs:
           tag_name: ${{ needs.prepare.outputs.tag }}
           release_name: Release Alpha ${{ needs.prepare.outputs.tag }}
           body: |
-            SHA256 checksum (in Linux, check like this when in download folder)
+            SHA256 checksum (on Linux, check like this when in download folder)
             ```
             echo "${{ steps.build-driver.outputs.shasum }}  ${{ env.ASSET_FILE_NAME }}" | sha256sum -c
             ```
