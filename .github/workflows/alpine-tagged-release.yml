@@ -53,7 +53,7 @@ jobs:
           body: |
             SHA256 checksum (in Linux, check like this when in download folder)
             ```
-            echo ${{ steps.build-driver.outputs.shasum }}  ${{ env.ASSET_FILE_NAME }} | sha256sum -c
+            echo "${{ steps.build-driver.outputs.shasum }}  ${{ env.ASSET_FILE_NAME }}" | sha256sum -c
             ```
           draft: false
           prerelease: false
