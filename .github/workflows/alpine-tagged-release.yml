@@ -66,5 +66,5 @@ jobs:
       with:
           upload_url: ${{ steps.create_release.outputs.upload_url }}
           asset_path: ./${{ env.XZ_FILE_NAME }}
-          asset_name: ${{ ASSET_FILE_NAME }}
+          asset_name: ${{ env.ASSET_FILE_NAME }}
           asset_content_type: application/x-xz
