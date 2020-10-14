@@ -20,7 +20,6 @@ require (
 	github.com/hashicorp/go-envparse v0.0.0-20190703193109-150b3a2a4611 // indirect
 	github.com/hashicorp/go-getter v1.4.0 // indirect
 	github.com/hashicorp/go-hclog v0.12.2
-	github.com/hashicorp/go-plugin v1.0.2-0.20191004171845-809113480b55
 	github.com/hashicorp/go-version v1.2.1 // indirect
 	github.com/hashicorp/nomad v0.12.3
 	github.com/hashicorp/serf v0.9.4 // indirect
