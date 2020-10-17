@@ -923,7 +923,12 @@ func authFromTaskConfig(cfg *TaskConfig) authBackend {
 	return func(string) (*docker.AuthConfiguration, error) {
 		// If all auth fields are empty, return
 		if cfg.Docker.Auth.Username == "" && cfg.Docker.Auth.Password == "" && cfg.Docker.Auth.Email == "" && cfg.Docker.Auth.ServerAddr == "" {
-			return nil, nil
+			return &docker.AuthConfiguration{
+				Username:      "",
+				Password:      "",
+				Email:         "",
+				ServerAddress: "",
+			}, nil
 		}
 		return &docker.AuthConfiguration{
 			Username:      cfg.Docker.Auth.Username,
