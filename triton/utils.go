@@ -20,7 +20,12 @@ func authFromTaskConfig(tc TaskConfig) authBackend {
 	return func(string) (*docker.AuthConfiguration, error) {
 		// If all auth fields are empty, return
 		if len(tc.Docker.Auth.Username) == 0 && len(tc.Docker.Auth.Password) == 0 && len(tc.Docker.Auth.Email) == 0 && len(tc.Docker.Auth.ServerAddr) == 0 {
-			return nil, nil
+			return &docker.AuthConfiguration{
+				Username:      "",
+				Password:      "",
+				Email:         "",
+				ServerAddress: "",
+			}, nil
 		}
 		return &docker.AuthConfiguration{
 			Username:      tc.Docker.Auth.Username,
@@ -29,15 +34,4 @@ func authFromTaskConfig(tc TaskConfig) authBackend {
 			ServerAddress: tc.Docker.Auth.ServerAddr,
 		}, nil
 	}
-}
-
-// authIsEmpty returns if auth is nil or an empty structure
-func authIsEmpty(auth *docker.AuthConfiguration) bool {
-	if auth == nil {
-		return false
-	}
-	return auth.Username == "" &&
-		auth.Password == "" &&
-		auth.Email == "" &&
-		auth.ServerAddress == ""
 }
