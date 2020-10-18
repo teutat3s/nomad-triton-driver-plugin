@@ -1,0 +1,495 @@
+### Nomad Config Inputs
+```
+	taskConfigSpec = hclspec.NewObject(map[string]*hclspec.Spec{
+		"docker_api": hclspec.NewBlock("docker_api", false, hclspec.NewObject(map[string]*hclspec.Spec{
+			"cmd":             hclspec.NewAttr("cmd", "list(string)", false),
+			"entrypoint":      hclspec.NewAttr("entrypoint", "list(string)", false),
+			"openstdin":       hclspec.NewAttr("openstdin", "bool", false),
+			"stdinonce":       hclspec.NewAttr("stdinonce", "bool", false),
+			"tty":             hclspec.NewAttr("tty", "bool", false),
+			"workingdir":      hclspec.NewAttr("workingdir", "string", false),
+			"hostname":        hclspec.NewAttr("hostname", "string", false),
+			"dns":             hclspec.NewAttr("dns", "list(string)", false),
+			"dns_search":      hclspec.NewAttr("dns_search", "list(string)", false),
+			"extra_hosts":     hclspec.NewAttr("extra_hosts", "list(string)", false),
+			"user":            hclspec.NewAttr("user", "string", false),
+			"domain_name":     hclspec.NewAttr("domain_name", "string", false),
+			"labels":          hclspec.NewBlockAttrs("labels", "string", false),
+			"public_network":  hclspec.NewAttr("public_network", "string", false),
+			"private_network": hclspec.NewAttr("private_network", "string", false),
+			"log_config": hclspec.NewBlock("log_config", false, hclspec.NewObject(map[string]*hclspec.Spec{
+				"type":   hclspec.NewAttr("type", "string", false),
+				"config": hclspec.NewBlockAttrs("config", "string", false),
+			})),
+			"ports": hclspec.NewBlock("ports", false, hclspec.NewObject(map[string]*hclspec.Spec{
+				"tcp":         hclspec.NewAttr("tcp", "list(number)", false),
+				"udp":         hclspec.NewAttr("udp", "list(number)", false),
+				"publish_all": hclspec.NewAttr("publish_all", "bool", false),
+			})),
+			"image": hclspec.NewBlock("image", true, hclspec.NewObject(map[string]*hclspec.Spec{
+				"name":      hclspec.NewAttr("name", "string", true),
+				"tag":       hclspec.NewAttr("tag", "string", false),
+				"auto_pull": hclspec.NewAttr("auto_pull", "bool", false),
+			})),
+			"auth": hclspec.NewBlock("auth", false, hclspec.NewObject(map[string]*hclspec.Spec{
+				"username":       hclspec.NewAttr("username", "string", false),
+				"password":       hclspec.NewAttr("password", "string", false),
+				"email":          hclspec.NewAttr("email", "string", false),
+				"server_address": hclspec.NewAttr("server_address", "string", false),
+			})),
+			"restart_policy": hclspec.NewAttr("restart_policy", "string", false),
+		})),
+		"cloud_api": hclspec.NewBlock("cloud_api", false, hclspec.NewObject(map[string]*hclspec.Spec{
+			"image": hclspec.NewBlock("image", true, hclspec.NewObject(map[string]*hclspec.Spec{
+				"name":        hclspec.NewAttr("name", "string", false),
+				"version":     hclspec.NewAttr("version", "string", false),
+				"most_recent": hclspec.NewAttr("most_recent", "bool", false),
+			})),
+			"networks": hclspec.NewBlockList("networks", hclspec.NewObject(map[string]*hclspec.Spec{
+				"name": hclspec.NewAttr("name", "string", false),
+			})),
+			"user_data":    hclspec.NewAttr("user_data", "string", false),
+			"cloud_config": hclspec.NewAttr("cloud_config", "string", false),
+			"user_script":  hclspec.NewAttr("user_script", "string", false),
+		})),
+		"tags":                hclspec.NewBlockAttrs("tags", "string", false),
+		"affinity":            hclspec.NewAttr("affinity", "list(string)", false),
+		"deletion_protection": hclspec.NewAttr("deletion_protection", "bool", false),
+		"fwenabled":           hclspec.NewAttr("fwenabled", "bool", false),
+		"fwrules":             hclspec.NewBlockAttrs("fwrules", "string", false),
+		"cns":                 hclspec.NewAttr("cns", "list(string)", false),
+		"package": hclspec.NewBlock("package", true, hclspec.NewObject(map[string]*hclspec.Spec{
+			"name":    hclspec.NewAttr("name", "string", false),
+			"version": hclspec.NewAttr("version", "string", false),
+		})),
+		"exit_strategy": hclspec.NewAttr("exit_strategy", "string", false),
+	})
+```
+
+#### docker_api _stanza_
+Contains the parameters required to provision a docker instance on Triton.
+```
+"docker_api": {}
+```
+#### docker_api.cmd _[]string_
+Command to run specified as a string or an array of strings.
+```
+"docker_api": {
+  "cmd": [
+    "date",
+  ]
+}
+```
+#### docker_api.entrypoint _[]string_
+Set the entry point for the container as a string or an array of strings.
+```
+"docker_api": {
+  "entrypoint": [
+    "date",
+  ]
+}
+```
+#### docker_api.openstdin _bool_
+Boolean value, opens stdin.
+```
+"docker_api": {
+  "openstdin": false
+}
+```
+#### docker_api.stdinonce _bool_
+Boolean value, close stdin after the 1 attached client disconnects.
+```
+"docker_api": {
+  "stdinonce": false
+}
+```
+#### docker_api.tty _bool_
+Boolean value, Attach standard streams to a tty, including stdin if it is not closed.
+```
+"docker_api": {
+  "tty": false
+}
+```
+#### docker_api.workingdir _string_
+A string specifying the working directory for commands to run in.
+```
+"docker_api": {
+  "workingdir": "/foo/bar"
+}
+```
+#### docker_api.hostname _string_
+A string value containing the hostname to use for the container. This must be a valid RFC 1123 hostname.
+```
+"docker_api": {
+  "hostname": "foo" 
+}
+```
+#### docker_api.dns _[]string_
+A list of DNS servers for the container to use.
+```
+"docker_api": {
+  "dns": [
+    "8.8.8.8",
+    "8.8.4.4",
+  ]
+}
+```
+#### docker_api.dns_search _[]string_
+A list of DNS search domains
+```
+"docker_api": {
+  "dns_search": [
+    "foo.com",
+    "rxcorp.com",
+  ] 
+}
+```
+#### docker_api.extra_hosts _[]string_
+A list of hostnames/IP mappings to add to the container’s /etc/hosts file. Specified in the form ["hostname:IP"].
+```
+"docker_api": {
+  "extra_hosts": [
+    "foo:10.45.136.2",
+    "bar:10.45.137.3",
+  ]
+}
+```
+#### docker_api.user _string_
+A string value specifying the user inside the container.
+```
+"docker_api": {
+  "user": "foo" 
+}
+```
+#### docker_api.domain_name _string_
+A string value containing the domain name to use for the container.
+```
+"docker_api": {
+  "domain_name": "foo.com" 
+}
+```
+#### docker_api.labels _map[string]string_
+Labels - Adds a map of labels to a container. To specify a map: {"key":"value", ... }
+```
+"docker_api": {
+  "labels" {
+    group         = "webservice-cache"
+    bob.bill.john = "label"
+    test          = "test"
+  }
+}
+```
+#### docker_api.public_network _string_
+A string value specifying the public network to use inside the container.
+```
+"docker_api": {
+  "public_network": "sdc_nat" 
+}
+```
+#### docker_api.private_network _string_
+A string value specifying the private network to use inside the container.
+```
+"docker_api": {
+  "private_network": "sdc_nat" 
+}
+```
+#### docker_api.log_config _stanza_
+Log configuration for the container.
+```
+"docker_api": {
+  "log_config": {}
+}
+```
+#### docker_api.log_config.type _string_
+A string value specifying the docker log driver type. see https://github.com/joyent/sdc-docker/blob/master/docs/api/features/logdrivers.md, https://www.joyent.com/blog/docker-log-drivers 
+```
+"docker_api": {
+  "log_config" {
+    "type": "syslog",
+  }
+}
+```
+#### docker_api.log_config.config _map[string]string_
+A map of string values specifying the log options for the log driver specified.
+```
+"docker_api": {
+  "log_config" {
+    "type": "syslog",
+    "config" {
+      "syslog-address" = "tcp://host:port"
+    }
+  }
+}
+```
+#### docker_api.ports _stanza_
+A stanza defining which tcp and udp ports you would like to publish.
+```
+"docker_api": {
+  "ports": {}
+}
+```
+#### docker_api.ports.tcp _[]int_
+A list of int defining which tcp ports you would like to publish.
+```
+"docker_api": {
+  "ports": {
+    tcp = [
+      6379,
+    ]
+  }
+}
+```
+#### docker_api.ports.udp _[]int_
+A list defining which udp ports you would like to publish.
+```
+"docker_api": {
+  "ports": {
+    udp = [
+      6379,
+    ]
+  }
+}
+```
+#### docker_api.ports.publish_all _bool_
+Allocates an ephemeral host port for all of a container’s exposed ports. Specified as a boolean value.
+```
+"docker_api": {
+  "publish_all": true
+}
+```
+#### docker_api.image _stanza_
+Specifies the image name,tag and pull policy to use for the container
+```
+"docker_api": {
+  image {
+    name      = "redis"
+    tag       = "latest"
+    auto_pull = true
+  }
+}
+```
+#### docker_api.image.name _string_
+Specifies the image name to use for the container.
+```
+"docker_api": {
+  image {
+    name      = "redis"
+    tag       = "latest"
+    auto_pull = true
+  }
+}
+```
+#### docker_api.image.tag _string_
+Specifies the image tag to use for the container.  Defaults to latest
+```
+"docker_api": {
+  image {
+    name      = "redis"
+    tag       = "latest"
+    auto_pull = true
+  }
+}
+```
+#### docker_api.image.auto_pull _bool_
+A bool specifying if the Triton Docker API will attempt to pull the image.
+```
+"docker_api": {
+  image {
+    name      = "redis"
+    tag       = "latest"
+    auto_pull = true
+  }
+}
+```
+#### docker_api.auth _stanza_
+(Optional) Provide authentication for a private registry
+```
+"docker_api": {
+  auth {
+    username       = "dockerhub_user"
+    password       = "dockerhub_password"
+  }
+}
+```
+#### docker_api.auth.username _string_
+(Optional) The private registry account username.
+```
+"docker_api": {
+  auth {
+    username       = "dockerhub_user"
+    password       = "dockerhub_password"
+  }
+}
+```
+#### docker_api.auth.password _string_
+(Optional) The private registry account password.
+```
+"docker_api": {
+  auth {
+    username       = "dockerhub_user"
+    password       = "dockerhub_password"
+  }
+}
+```
+#### docker_api.restart_policy _string_
+The behavior to apply when the container exits. The value is an object with a Name property of either "always" to always restart, "unless-stopped" to restart always except when user has manually stopped the container or "on-failure" to restart only when the container exit code is non-zero. If on-failure is used, MaximumRetryCount controls the number of times to retry before giving up. The default is not to restart. (optional) An ever increasing delay (double the previous delay, starting at 100mS) is added before each restart to prevent flooding the server.
+```
+"docker_api": {
+  "restart_policy": "always"
+}
+```
+#### cloud_api _stanza_
+Contains the parameters required to provision a cloudapi instance on Triton.
+```
+"cloud_api": {}
+```
+#### cloud_api.image _stanza_
+Contains the name, uuid, version, and most_recent attributes in order to provision a cloudapi instance on Triton.
+```
+"cloud_api": {
+  "image" {}
+}
+```
+#### cloud_api.image.name _string_
+A string specifying the name of the image that will be used to provision a cloudapi instance on Triton.
+```
+"cloud_api": {
+  "image" {
+    "name" = "consul"
+  }
+}
+```
+#### cloud_api.image.version _string_
+A string specifying the version of the image that will be used to provision a cloudapi instance on Triton.
+```
+"cloud_api": {
+  "image" {
+    "version" = "1554126304"
+  }
+}
+```
+#### cloud_api.image.most_recent _bool_
+A bool specifying to use the most recent version of the image that will be used to provision a cloudapi instance on Triton.
+```
+"cloud_api": {
+  "image" {
+    "most_recent" =  true
+  }
+}
+```
+#### cloud_api.networks _[]map[string]string_
+A list of network objects specifying which networks to use while provisioning a cloudapi instance on Triton.
+```
+"cloud_api": {
+  "networks" = [
+    {
+      name = "sdc_nat"
+    },
+    {
+      name = "consul"
+    },
+  ]
+}
+```
+#### cloud_api.networks.name _string_
+A string specifying the name of a network to use while provisioning a cloudapi instance on Triton.
+```
+"cloud_api": {
+  "networks" = [
+    {
+      name = "sdc_nat"
+    },
+    {
+      name = "consul"
+    },
+  ]
+}
+```
+#### cloud_api.user_data _string_
+A string specifying the user_data that will be used when provisioning a cloudapi instance on Triton.
+```
+"cloud_api": {
+  "user_data" = "'{ "foo": "bar"}'"
+}
+```
+#### cloud_api.cloud_config _string_
+A string specifying the cloud_config that will be used when provisioning a cloudapi instance on Triton.
+```
+"cloud_api": {
+  "cloud_config: "cloud_config string here"
+}
+```
+#### cloud_api.user_script _string_
+A string specifying the user_script that will be used when provisioning a cloudapi instance on Triton.
+```
+"cloud_api": {
+  "user_script: "user_script string here"
+}
+```
+#### tags _map[string]string_
+A map of string specifying the k:v tags that will be used when provisioning a instance on Triton.
+```
+tags = {
+  consul = "true"
+}
+```
+#### affinity _[]string_
+A list of string specifying the affinity rules that will be used when provisioning an instance on Triton.
+```
+affinity = [
+  "rule 1 here",
+]
+```
+#### deletion_protection _bool_
+A bool specifying whether to enable deletion protection for the instance on Triton.
+```
+deletion_protection = false
+```
+#### fwenabled _bool_
+A bool specifying whether to enable the firewall for the instance on Triton.
+```
+fwenabled = false
+```
+#### fwrules _map[string]string_
+A map of string specifying the firewall rules to use while provisioning an instance on Triton.
+```
+fwrules = {
+  anytoconsului = "FROM any TO tag consul ALLOW tcp (PORT 22 AND PORT 8500)"
+  consultcp     = "FROM tag consul TO tag consul ALLOW tcp PORT all"
+  consuludp     = "FROM tag consul TO tag consul ALLOW udp PORT all"
+}
+```
+#### cns _[]string_
+A list of string specifying the cns service names to use while provisioning an instance on Triton.
+```
+cns = [
+  "consul",
+]
+```
+#### package _stanza_
+Specifies the package name and version or uuid to use while provisioning an instance on Triton.
+```
+package {
+  name = "sample-512M"
+}
+```
+#### package.name _string_
+Specifies the package name to use while provisioning an instance on Triton.
+```
+package {
+  name = "sample-512M"
+}
+```
+#### package.version _string_
+Specifies the package version to use while provisioning an instance on Triton.
+```
+package {
+  name = "sample-512M"
+  version = "0.0.1"
+}
+```
+#### exit_strategy _string_
+A string specifying the desired exit strategy for the nomad task. Can be either "stopped" or "deleted".  Defaults to "stopped".
+```
+exit_stratey = "deleted"
+```
