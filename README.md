@@ -1,3 +1,16 @@
+![Go tests](https://github.com/teutat3s/nomad-triton-driver-plugin/workflows/Go%20tests/badge.svg)
+
+```sh
+$ git clone https://github.com/teutat3s/nomad-triton-driver-plugin
+
+$ cd nomad-triton-driver-plugin
+
+$ make build
+go build -o triton-driver .
+```
+
+### Original ReadMe
+
 Nomad Skeleton Driver Plugin
 ==========
 

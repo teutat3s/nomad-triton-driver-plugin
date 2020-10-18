@@ -1,0 +1,70 @@
+name: Build triton-driver binary on alpine linux and release it
+
+on:
+  create:
+    branches: [ master ]
+
+jobs:
+  prepare:
+    name: Format Release Tag
+    runs-on: ubuntu-latest
+    outputs:
+        tag: ${{ steps.release_tag.outputs.tag }}
+    steps:
+        - name: Create Formatted Release Tag
+          id: release_tag
+          run: echo ::set-output name=tag::$(echo ${GITHUB_REF:10})
+
+  build:
+    needs: prepare
+    name: Build on alpine
+    runs-on: ubuntu-latest
+    env:
+      TAR_FILE_NAME: nomad-triton-driver-plugin_alpine.tar
+      XZ_FILE_NAME: nomad-triton-driver-plugin_alpine.tar.xz
+      ASSET_FILE_NAME: nomad-triton-driver-plugin_alpine-${{ needs.prepare.outputs.tag }}.tar.xz
+    steps:
+
+    - name: Check out code into the Go module directory
+      uses: actions/checkout@v2
+
+    - name: Build go driver binary
+      id: build-driver
+      run: |
+        set -xe
+        tag=release:$$
+        docker build --tag $tag .
+        container=$(docker create $tag)
+        docker cp $container:/root/nomad-triton-driver-plugin/triton-driver - > $TAR_FILE_NAME
+        docker rm $container
+        docker rmi $tag
+        xz $TAR_FILE_NAME
+        shasum_long=$(sha256sum $XZ_FILE_NAME)
+        echo ::set-output name=shasum::$(echo ${shasum_long:0:64})
+
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          release_name: Release Alpha ${{ needs.prepare.outputs.tag }}
+          body: |
+            SHA256 checksum (on Linux, check like this when in download folder)
+            ```
+            echo "${{ steps.build-driver.outputs.shasum }}  ${{ env.ASSET_FILE_NAME }}" | sha256sum -c
+            ```
+          draft: false
+          prerelease: false
+
+    - name: Upload Release Asset
+      id: upload_release_asset
+      uses: actions/upload-release-asset@v1
+      env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./${{ env.XZ_FILE_NAME }}
+          asset_name: ${{ env.ASSET_FILE_NAME }}
+          asset_content_type: application/x-xz
