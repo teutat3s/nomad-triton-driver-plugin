@@ -33,7 +33,7 @@ jobs:
         git checkout f-remotetask-3
         cd ../nomad-triton-driver-plugin
         sed -i /home/d go.mod
-        echo "replace github.com/hashicorp/nomad => /home/runner/nomad-triton-driver-plugin/nomad" >> go.mod
+        echo "replace github.com/hashicorp/nomad => /home/runner/work/nomad-triton-driver-plugin/nomad" >> go.mod
 
 
     - name: Get dependencies
