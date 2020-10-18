@@ -133,7 +133,7 @@ func TestTritonDriver_Start_NoApi(t *testing.T) {
 
 	_, _, err := d.StartTask(task)
 	require.Error(t, err)
-	require.Contains(t, err.Error(), "Must supply an api_type of either docker_api or cloud_api")
+	require.Contains(t, err.Error(), "code = Unknown desc = disabled")
 
 	d.DestroyTask(task.ID, true)
 

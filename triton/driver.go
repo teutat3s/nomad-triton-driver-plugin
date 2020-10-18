@@ -2,58 +2,24 @@ package triton
 
 import (
 	"context"
+	"encoding/pem"
 	"fmt"
+	"io/ioutil"
+	"log"
+	"os"
+	"sync"
 	"time"
 
+	docker "github.com/fsouza/go-dockerclient"
 	hclog "github.com/hashicorp/go-hclog"
+	"github.com/hashicorp/nomad/client/structs"
+	"github.com/hashicorp/nomad/drivers/shared/eventer"
 	"github.com/hashicorp/nomad/plugins/base"
 	"github.com/hashicorp/nomad/plugins/drivers"
 	"github.com/hashicorp/nomad/plugins/shared/hclspec"
-	"github.com/hashicorp/nomad/plugins/shared/structs"
-	"github.com/joyent/triton-go/compute"
-	"github.com/joyent/triton-go/network"
-)
-
-const (
-	// pluginName is the name of the plugin
-	// this is used for logging and (along with the version) for uniquely
-	// identifying plugin binaries fingerprinted by the client
-	pluginName = "triton"
-
-	// pluginVersion allows the client to identify and use newer versions of
-	// an installed plugin
-	pluginVersion = "v0.1.0"
-
-	// fingerprintPeriod is the interval at which the plugin will send
-	// fingerprint responses
-	fingerprintPeriod = 30 * time.Second
-
-	// taskHandleVersion is the version of task handle which this plugin sets
-	// and understands how to decode
-	// this is used to allow modification and migration of the task schema
-	// used by the plugin
-	taskHandleVersion = 1
-)
-
-var (
-	// pluginInfo describes the plugin
-	pluginInfo = &base.PluginInfoResponse{
-		Type:              base.PluginTypeDriver,
-		PluginApiVersions: []string{drivers.ApiVersion010},
-		PluginVersion:     pluginVersion,
-		Name:              pluginName,
-	}
-
-	// capabilities indicates what optional features this driver supports
-	// this should be set according to the target run time.
-	capabilities = &drivers.Capabilities{
-		// The plugin's capabilities signal Nomad which extra functionalities
-		// are supported. For a list of available options check the docs page:
-		// https://godoc.org/github.com/hashicorp/nomad/plugins/drivers#Capabilities
-		SendSignals: false,
-		Exec:        false,
-		FSIsolation: drivers.FSIsolationImage,
-	}
+	pstructs "github.com/hashicorp/nomad/plugins/shared/structs"
+	"github.com/joyent/triton-go"
+	"github.com/joyent/triton-go/authentication"
 )
 
 // TaskState is the runtime state which is encoded in the handle returned to
@@ -61,7 +27,7 @@ var (
 // This information is needed to rebuild the task state and handler during
 // recovery.
 type TaskState struct {
-	ReattachConfig *structs.ReattachConfig
+	ReattachConfig *pstructs.ReattachConfig
 	TaskConfig     *drivers.TaskConfig
 	StartedAt      time.Time
 
@@ -70,14 +36,16 @@ type TaskState struct {
 	// will respawn a new instance of the plugin and try to restore its
 	// in-memory representation of the running tasks using the RecoverTask()
 	// method below.
-	APIType      string
-	InstanceID   string
-	FWRules      []string
-	ExitStrategy string
+	InstUUID     string
+	InstanceName string
 }
 
 // Driver is a nomad driver plugin for provisioning instances on triton
 type Driver struct {
+	// eventer is used to handle multiplexing of TaskEvents calls such that an
+	// event can be broadcast to all callers
+	eventer *eventer.Eventer
+
 	// config is the plugin configuration set by the SetConfig RPC
 	config *DriverConfig
 
@@ -99,8 +67,8 @@ type Driver struct {
 	// file located in the root of the TaskDir
 	logger hclog.Logger
 
-	// tth encapsulates triton task remote calls
-	tth *TritonTaskHandler
+	// tritonClientInterface is the interface used for communicating with Joyent Triton
+	client tritonClientInterface
 }
 
 // NewTritonDriver returns a new DriverPlugin implementation
@@ -109,12 +77,12 @@ func NewTritonDriver(logger hclog.Logger) drivers.DriverPlugin {
 	logger = logger.Named(pluginName)
 
 	return &Driver{
+		eventer:        eventer.NewEventer(ctx, logger),
 		config:         &DriverConfig{},
 		tasks:          newTaskStore(),
 		ctx:            ctx,
 		signalShutdown: cancel,
 		logger:         logger,
-		tth:            NewTritonTaskHandler(logger),
 	}
 }
 
@@ -166,6 +134,101 @@ func (d *Driver) SetConfig(cfg *base.Config) error {
 	// Here you can use the config values to initialize any resources that are
 	// shared by all tasks that use this driver, such as a daemon process.
 
+	client, err := d.newTritonClient(d.logger)
+	if err != nil {
+		return fmt.Errorf("failed to create Triton client: %v", err)
+	}
+
+	d.client = client
+
+	return nil
+}
+
+func (d *Driver) newTritonClient(logger hclog.Logger) (tritonClientInterface, error) {
+	// Init the Triton Client
+	keyID := triton.GetEnv("KEY_ID")
+	accountName := triton.GetEnv("ACCOUNT")
+	keyMaterial := triton.GetEnv("KEY_MATERIAL")
+	userName := triton.GetEnv("USER")
+	insecure := false
+	if triton.GetEnv("INSECURE") != "" {
+		insecure = true
+	}
+
+	var signer authentication.Signer
+	var err error
+
+	if keyMaterial == "" {
+		input := authentication.SSHAgentSignerInput{
+			KeyID:       keyID,
+			AccountName: accountName,
+			Username:    userName,
+		}
+		signer, err = authentication.NewSSHAgentSigner(input)
+		if err != nil {
+			log.Fatalf("Error Creating SSH Agent Signer: %s", err)
+		}
+	} else {
+		var keyBytes []byte
+		if _, err = os.Stat(keyMaterial); err == nil {
+			keyBytes, err = ioutil.ReadFile(keyMaterial)
+			if err != nil {
+				log.Fatalf("Error reading key material from %s: %s",
+					keyMaterial, err)
+			}
+			block, _ := pem.Decode(keyBytes)
+			if block == nil {
+				log.Fatalf(
+					"Failed to read key material '%s': no key found", keyMaterial)
+			}
+
+			if block.Headers["Proc-Type"] == "4,ENCRYPTED" {
+				log.Fatalf(
+					"Failed to read key '%s': password protected keys are\n"+
+						"not currently supported. Please decrypt the key prior to use.", keyMaterial)
+			}
+
+		} else {
+			keyBytes = []byte(keyMaterial)
+		}
+
+		input := authentication.PrivateKeySignerInput{
+			KeyID:              keyID,
+			PrivateKeyMaterial: keyBytes,
+			AccountName:        accountName,
+			Username:           userName,
+		}
+		signer, err = authentication.NewPrivateKeySigner(input)
+		if err != nil {
+			log.Fatalf("Error Creating SSH Private Key Signer: %s", err)
+		}
+	}
+
+	// Triton Client Config
+	tritonConfig := &triton.ClientConfig{
+		TritonURL:   triton.GetEnv("URL"),
+		AccountName: accountName,
+		Username:    userName,
+		Signers:     []authentication.Signer{signer},
+	}
+
+	// Triton Docker Config
+	dockerClient, err := docker.NewClientFromEnv()
+
+	return tritonClient{
+		tclient: &Client{
+			Config:                tritonConfig,
+			InsecureSkipTLSVerify: insecure,
+			AffinityLock:          &sync.RWMutex{},
+		},
+		dclient: dockerClient,
+		logger:  logger,
+	}, nil
+
+}
+
+func (d *Driver) Shutdown(ctx context.Context) error {
+	d.signalShutdown()
 	return nil
 }
 
@@ -204,13 +267,13 @@ func (d *Driver) handleFingerprint(ctx context.Context, ch chan<- *drivers.Finge
 			// after the initial fingerprint we can set the proper fingerprint
 			// period
 			ticker.Reset(fingerprintPeriod)
-			ch <- d.buildFingerprint()
+			ch <- d.buildFingerprint(ctx)
 		}
 	}
 }
 
 // buildFingerprint returns the driver's fingerprint data
-func (d *Driver) buildFingerprint() *drivers.Fingerprint {
+func (d *Driver) buildFingerprint(ctx context.Context) *drivers.Fingerprint {
 	// fp := &drivers.Fingerprint{
 	// 	Attributes:        map[string]*structs.Attribute{},
 	// 	Health:            drivers.HealthStateHealthy,
@@ -259,7 +322,25 @@ func (d *Driver) buildFingerprint() *drivers.Fingerprint {
 
 	health := drivers.HealthStateHealthy
 	desc := "ready"
-	attrs := map[string]*structs.Attribute{"driver.triton": structs.NewStringAttribute("1")}
+	attrs := map[string]*pstructs.Attribute{"driver.triton": pstructs.NewStringAttribute("1")}
+
+	d.logger.Info("Inside buildFingerprint", d.config)
+	if d.config.Enabled {
+		if err := d.client.DescribeCluster(ctx); err != nil {
+			d.logger.Info("Error on Describe")
+			health = drivers.HealthStateUnhealthy
+			desc = err.Error()
+			attrs["driver.triton"] = pstructs.NewBoolAttribute(false)
+		} else {
+			d.logger.Info("pass on Describe")
+			health = drivers.HealthStateHealthy
+			desc = "Healthy"
+			attrs["driver.triton"] = pstructs.NewBoolAttribute(true)
+		}
+	} else {
+		health = drivers.HealthStateUndetected
+		desc = "disabled"
+	}
 
 	return &drivers.Fingerprint{
 		Attributes:        attrs,
@@ -271,6 +352,10 @@ func (d *Driver) buildFingerprint() *drivers.Fingerprint {
 // StartTask returns a task handle and a driver network if necessary.
 func (d *Driver) StartTask(cfg *drivers.TaskConfig) (*drivers.TaskHandle, *drivers.DriverNetwork, error) {
 	d.logger.Info("Inside StartTask")
+	if !d.config.Enabled {
+		return nil, nil, fmt.Errorf("disabled")
+	}
+
 	if _, ok := d.tasks.Get(cfg.ID); ok {
 		return nil, nil, fmt.Errorf("task with ID %q already started", cfg.ID)
 	}
@@ -278,29 +363,6 @@ func (d *Driver) StartTask(cfg *drivers.TaskConfig) (*drivers.TaskHandle, *drive
 	var driverConfig TaskConfig
 	if err := cfg.DecodeDriverConfig(&driverConfig); err != nil {
 		return nil, nil, fmt.Errorf("failed to decode driver config: %v", err)
-	}
-
-	// Assert we have either docker_api or cloud_api
-	switch driverConfig.APIType {
-	case "docker_api":
-		break
-	case "cloud_api":
-		break
-	default:
-		return nil, nil, fmt.Errorf("Must supply an api_type of either docker_api or cloud_api")
-	}
-
-	switch driverConfig.ExitStrategy {
-	case "stopped":
-		break
-	case "deleted":
-		break
-		// Default to stopped
-	case "":
-		driverConfig.ExitStrategy = "stopped"
-		break
-	default:
-		return nil, nil, fmt.Errorf("Must supply an exit_strategy of either stopped or deleted")
 	}
 
 	d.logger.Info("starting triton task", "driver_cfg", hclog.Fmt("%+v", driverConfig))
@@ -325,71 +387,56 @@ func (d *Driver) StartTask(cfg *drivers.TaskConfig) (*drivers.TaskHandle, *drive
 	// configuration that can be used to recover communication with the task.
 
 	// Create a Triton Task
-	tt, err := d.tth.NewTritonTask(cfg, driverConfig)
+	instUUID, driverNetwork, err := d.client.RunTask(context.Background(), cfg, driverConfig)
 	if err != nil {
-		return nil, nil, err
-	}
-	d.logger.Info("W00T_PLUGINSTANCE", tt.Instance)
-
-	var fwruleids []string
-	for _, v := range tt.FWRules {
-		fwruleids = append(fwruleids, v.ID)
-	}
-
-	h := &taskHandle{
-		tth:        d.tth,
-		taskConfig: cfg,
-		tritonTask: tt,
-		procState:  drivers.TaskStateRunning,
-		startedAt:  time.Now().Round(time.Millisecond),
-		logger:     d.logger,
-		waitCh:     make(chan struct{}),
-	}
-
-	d.logger.Info("W00T_PLUGINIP", tt.Instance.PrimaryIP)
-
-	n := &drivers.DriverNetwork{
-		IP:            tt.Instance.PrimaryIP,
-		AutoAdvertise: true,
+		return nil, nil, fmt.Errorf("failed to start Triton instance: %v", err)
 	}
 
 	driverState := TaskState{
-		APIType:      driverConfig.APIType,
-		InstanceID:   tt.Instance.ID,
-		FWRules:      fwruleids,
-		TaskConfig:   cfg,
-		StartedAt:    h.startedAt,
-		ExitStrategy: tt.ExitStrategy,
+		TaskConfig: cfg,
+		StartedAt:  time.Now(),
+		InstUUID:   instUUID,
 	}
 
-	//d.logger.Info(fmt.Sprintf("DRIVERSTATE: %s", driverState))
+	d.logger.Info("triton instance started", "instuuid", driverState.InstUUID, "started_at", driverState.StartedAt)
+
+	h := newTaskHandle(d.logger, d.eventer, driverState, cfg, d.client)
 
 	if err := handle.SetDriverState(&driverState); err != nil {
 		d.logger.Error("failed to start task, error setting driver state", "error", err)
+		h.stop(false)
 		return nil, nil, fmt.Errorf("failed to set driver state: %v", err)
 	}
 
 	d.tasks.Set(cfg.ID, h)
 
 	go h.run()
-
-	d.logger.Info("W00T_NETWORK", n)
-	return handle, n, nil
+	return handle, driverNetwork, nil
 }
 
 // RecoverTask recreates the in-memory state of a task from a TaskHandle.
 func (d *Driver) RecoverTask(handle *drivers.TaskHandle) error {
 	d.logger.Info("Inside RecoverTask")
+	d.logger.Info("recovering triton instance", "version", handle.Version,
+		"task_config.id", handle.Config.ID, "task_state", handle.State,
+		"driver_state_bytes", len(handle.DriverState))
 	if handle == nil {
 		return fmt.Errorf("error: handle cannot be nil")
 	}
 
+	// If already attached to handle there's nothing to recover.
 	if _, ok := d.tasks.Get(handle.Config.ID); ok {
+		d.logger.Info("no triton instance to recover; task already exists",
+			"task_id", handle.Config.ID,
+			"task_name", handle.Config.Name,
+		)
 		return nil
 	}
 
+	// Handle doesn't already exist, try to reattach
 	var taskState TaskState
 	if err := handle.GetDriverState(&taskState); err != nil {
+		d.logger.Error("failed to decode task state from handle", "error", err, "task_id", handle.Config.ID)
 		return fmt.Errorf("failed to decode task state from handle: %v", err)
 	}
 
@@ -406,55 +453,10 @@ func (d *Driver) RecoverTask(handle *drivers.TaskHandle) error {
 	// In the example below we use the executor to re-attach to the process
 	// that was created when the task first started.
 
-	// Build Context
-	ctx := context.Background()
-	sctx, cancel := context.WithCancel(ctx)
+	d.logger.Info("triton instance recovered", "instUUID", taskState.InstUUID,
+		"started_at", taskState.StartedAt)
 
-	// Instance
-	c, err := d.tth.client.Compute()
-	if err != nil {
-		return err
-	}
-
-	pi, err := c.Instances().Get(sctx, &compute.GetInstanceInput{ID: taskState.InstanceID})
-	if err != nil {
-		return err
-	}
-
-	n, err := d.tth.client.Network()
-	if err != nil {
-		return err
-	}
-
-	// FWRules
-	var fwrules []*network.FirewallRule
-	for _, v := range taskState.FWRules {
-		pr, err := n.Firewall().GetRule(sctx, &network.GetRuleInput{
-			ID: v,
-		})
-		if err != nil {
-			return err
-		}
-		fwrules = append(fwrules, pr)
-	}
-
-	tt := &TritonTask{
-		Instance:     pi,
-		Ctx:          sctx,
-		Shutdown:     cancel,
-		FWRules:      fwrules,
-		ExitStrategy: taskState.ExitStrategy,
-	}
-
-	h := &taskHandle{
-		tth:        d.tth,
-		taskConfig: taskState.TaskConfig,
-		tritonTask: tt,
-		procState:  drivers.TaskStateRunning,
-		startedAt:  taskState.StartedAt,
-		logger:     d.logger,
-		waitCh:     make(chan struct{}),
-	}
+	h := newTaskHandle(d.logger, d.eventer, taskState, handle.Config, d.client)
 
 	d.tasks.Set(taskState.TaskConfig.ID, h)
 
@@ -487,14 +489,33 @@ func (d *Driver) handleWait(ctx context.Context, handle *taskHandle, ch chan *dr
 	// emit an event that an operator can use to get an insight on why the task
 	// stopped.
 
-	<-handle.waitCh
-	ch <- handle.exitResult
+	var result *drivers.ExitResult
+	select {
+	case <-ctx.Done():
+		return
+	case <-d.ctx.Done():
+		return
+	case <-handle.doneCh:
+		result = &drivers.ExitResult{
+			ExitCode: handle.exitResult.ExitCode,
+			Signal:   handle.exitResult.Signal,
+			Err:      nil,
+		}
+	}
+
+	select {
+	case <-ctx.Done():
+		return
+	case <-d.ctx.Done():
+		return
+	case ch <- result:
+	}
 }
 
 // StopTask stops a running task with the given signal and within the timeout window.
 func (d *Driver) StopTask(taskID string, timeout time.Duration, signal string) error {
 	d.logger.Info("Inside StopTask")
-	d.logger.Info("TIMEOUT_W00t", timeout)
+	d.logger.Info("stopping triton instance", "task_id", taskID, "timeout", timeout, "signal", signal)
 	handle, ok := d.tasks.Get(taskID)
 	if !ok {
 		return drivers.ErrTaskNotFound
@@ -509,16 +530,27 @@ func (d *Driver) StopTask(taskID string, timeout time.Duration, signal string) e
 	// In the example below we let the executor handle the task shutdown
 	// process for us, but you might need to customize this for your own
 	// implementation.
-	if err := d.tth.ShutdownInstance(handle.tritonTask); err != nil {
-		return fmt.Errorf("triton ShutdownInstance failed: %v", err)
+	// Detach if that's the signal, otherwise kill
+	detach := signal == drivers.DetachSignal
+	handle.stop(detach)
+
+	// Wait for handle to finish
+	select {
+	case <-handle.doneCh:
+	case <-time.After(timeout):
+		return fmt.Errorf("timed out waiting for triton task (id=%s) to stop (detach=%t)",
+			taskID, detach)
 	}
 
+	d.logger.Info("triton task stopped", "task_id", taskID, "timeout", timeout,
+		"signal", signal)
 	return nil
 }
 
 // DestroyTask cleans up and removes a task that has terminated.
 func (d *Driver) DestroyTask(taskID string, force bool) error {
 	d.logger.Info("Inside DestroyTask")
+	d.logger.Info("destroying triton task", "task_id", taskID, "force", force)
 	handle, ok := d.tasks.Get(taskID)
 	if !ok {
 		return drivers.ErrTaskNotFound
@@ -534,12 +566,17 @@ func (d *Driver) DestroyTask(taskID string, force bool) error {
 	// local references in the plugin. If force is set to true the task should
 	// be destroyed even if it's currently running.
 
-	// grace period is chosen arbitrary here
-	if err := d.tth.DestroyTritonTask(handle, force); err != nil {
-		handle.logger.Error("failed to destroy executor", "err", err)
+	// Safe to always kill here as detaching will have already happened
+	handle.stop(false)
+
+	if !handle.detach {
+		if err := handle.destroyTask(); err != nil {
+			return err
+		}
 	}
 
 	d.tasks.Delete(taskID)
+	d.logger.Info("triton instance destroyed", "task_id", taskID, "force", force)
 	return nil
 }
 
@@ -557,10 +594,11 @@ func (d *Driver) InspectTask(taskID string) (*drivers.TaskStatus, error) {
 // TaskStats returns a channel which the driver should send stats to at the given interval.
 func (d *Driver) TaskStats(ctx context.Context, taskID string, interval time.Duration) (<-chan *drivers.TaskResourceUsage, error) {
 	d.logger.Info("Inside TaskStats")
-	// handle, ok := d.tasks.Get(taskID)
-	// if !ok {
-	// 	return nil, drivers.ErrTaskNotFound
-	// }
+	d.logger.Info("sending triton instance stats", "task_id", taskID)
+	_, ok := d.tasks.Get(taskID)
+	if !ok {
+		return nil, drivers.ErrTaskNotFound
+	}
 
 	// TODO: implement driver specific logic to send task stats.
 	//
@@ -571,29 +609,68 @@ func (d *Driver) TaskStats(ctx context.Context, taskID string, interval time.Dur
 	// In the example below we use the Stats function provided by the executor,
 	// but you can build a set of functions similar to the fingerprint process.
 	// return handle.exec.Stats(ctx, interval)
-	return nil, nil
+	ch := make(chan *drivers.TaskResourceUsage)
+
+	go func() {
+		defer d.logger.Info("stopped sending triton instance stats", "task_id", taskID)
+		defer close(ch)
+		for {
+			select {
+			case <-time.After(interval):
+
+				// Nomad core does not currently have any resource based
+				// support for remote drivers. Once this changes, we may be
+				// able to report actual usage here.
+				//
+				// This is required, otherwise the driver panics.
+				ch <- &structs.TaskResourceUsage{
+					ResourceUsage: &drivers.ResourceUsage{
+						MemoryStats: &drivers.MemoryStats{},
+						CpuStats:    &drivers.CpuStats{},
+					},
+					Timestamp: time.Now().UTC().UnixNano(),
+				}
+			case <-ctx.Done():
+				return
+			}
+
+		}
+	}()
+
+	return ch, nil
 }
 
 // TaskEvents returns a channel that the plugin can use to emit task related events.
 func (d *Driver) TaskEvents(ctx context.Context) (<-chan *drivers.TaskEvent, error) {
-	d.logger.Info("Inside TaskEvents")
-	return make(chan *drivers.TaskEvent), nil
+	d.logger.Info("retrieving task events")
+	return d.eventer.TaskEvents(ctx)
 }
 
 // SignalTask forwards a signal to a task.
 // This is an optional capability.
 func (d *Driver) SignalTask(taskID string, signal string) error {
 	d.logger.Info("Inside SignalTask")
-	// handle, ok := d.tasks.Get(taskID)
-	// if !ok {
-	// 	return drivers.ErrTaskNotFound
-	// }
+	handle, ok := d.tasks.Get(taskID)
+	if !ok {
+		return drivers.ErrTaskNotFound
+	}
 
 	// driver specific signal handling logic.
 	//
 	// The given signal must be forwarded to the target taskID. If this plugin
 	// doesn't support receiving signals (capability SendSignals is set to
 	// false) you can just return nil.
+	instUUID := handle.instUUID
+
+	switch signal {
+	case "reboot":
+		handle.rebooting = true
+		if err := d.client.RebootTask(context.Background(), instUUID); err != nil {
+			handle.rebooting = false
+			return err
+		}
+		handle.rebooting = false
+	}
 
 	return nil
 }
@@ -603,5 +680,5 @@ func (d *Driver) SignalTask(taskID string, signal string) error {
 func (d *Driver) ExecTask(taskID string, cmd []string, timeout time.Duration) (*drivers.ExecTaskResult, error) {
 	d.logger.Info("Inside ExecTask")
 	// driver specific logic to execute commands in a task.
-	return nil, nil
+	return nil, fmt.Errorf("Triton driver does not support exec")
 }

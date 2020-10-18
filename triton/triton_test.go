@@ -55,7 +55,7 @@ func TestDockerDriver_AuthFromTaskConfig(t *testing.T) {
 
 	for _, c := range cases {
 		t.Run(c.Desc, func(t *testing.T) {
-			act, err := authFromTaskConfig(TaskConfig{Docker: DockerAPI{Auth: c.Auth}})("test")
+			act, err := authFromTaskConfig(&TaskConfig{Docker: DockerAPI{Auth: c.Auth}})("test")
 			require.NoError(t, err)
 			require.Exactly(t, c.AuthConfig, act)
 		})
