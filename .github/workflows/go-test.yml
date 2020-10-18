@@ -25,6 +25,17 @@ jobs:
     - name: Check out code into the Go module directory
       uses: actions/checkout@v2
 
+    - name: Get nomad source with f-remotetask-3 branch
+      run: |
+        cd ..
+        git clone https://github.com/teutat3s/nomad
+        cd nomad
+        git checkout f-remotetask-3
+        cd ../nomad-triton-driver-plugin
+        sed /home/d go.mod
+        echo "replace github.com/hashicorp/nomad => /home/runner/nomad-triton-driver-plugin/nomad" >> go.mod
+
+
     - name: Get dependencies
       run: |
         go get -v -t -d ./...
