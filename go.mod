@@ -17,18 +17,17 @@ require (
 	github.com/grpc-ecosystem/go-grpc-middleware v1.2.1 // indirect
 	github.com/hashicorp/errwrap v1.0.0
 	github.com/hashicorp/go-envparse v0.0.0-20190703193109-150b3a2a4611 // indirect
-	github.com/hashicorp/go-getter v1.4.0 // indirect
 	github.com/hashicorp/go-hclog v0.12.2
 	github.com/hashicorp/go-version v1.2.1 // indirect
 	github.com/hashicorp/nomad v0.12.5
 	github.com/hashicorp/serf v0.9.4 // indirect
-	github.com/joyent/triton-go v0.0.0-20190112182421-51ffac552869
+	github.com/joyent/triton-go v1.8.5
 	github.com/kr/pty v1.1.8 // indirect
 	github.com/mattn/go-colorable v0.1.7 // indirect
 	github.com/mitchellh/go-testing-interface v1.0.4 // indirect
-	github.com/mitchellh/mapstructure v1.3.3 // indirect
-	github.com/shirou/gopsutil v2.20.7+incompatible // indirect
-	github.com/stretchr/testify v1.5.1
+	github.com/mitchellh/mapstructure v1.3.3
+	github.com/ryboe/q v1.0.12
+	github.com/stretchr/testify v1.6.1
 	github.com/zclconf/go-cty v1.4.2 // indirect
 	golang.org/x/text v0.3.3 // indirect
 	google.golang.org/appengine v1.6.6 // indirect
@@ -41,4 +40,4 @@ replace github.com/shirou/gopsutil => github.com/hashicorp/gopsutil v2.18.13-0.2
 replace github.com/godbus/dbus => github.com/godbus/dbus v5.0.1+incompatible
 
 // try rebased nomad with remote-task
-replace github.com/hashicorp/nomad => /home/teutates/CodeRoom/go/src/github.com/teutat3s/nomad
+replace github.com/hashicorp/nomad => /home/arch/git/teutat3s/nomad

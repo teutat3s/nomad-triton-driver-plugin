@@ -8,4 +8,4 @@ clean: ## Remove build artifacts
 	rm -rf ${PLUGIN_BINARY}
 
 build:
-	go build -o ${PLUGIN_BINARY} .
+	go build -v -o ${PLUGIN_BINARY} .

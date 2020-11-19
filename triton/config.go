@@ -145,7 +145,6 @@ var (
 			"name":    hclspec.NewAttr("name", "string", false),
 			"version": hclspec.NewAttr("version", "string", false),
 		})),
-		"exit_strategy": hclspec.NewAttr("exit_strategy", "string", false),
 	})
 )
 
@@ -170,9 +169,7 @@ type TaskConfig struct {
 	Cloud              CloudAPI          `codec:"cloud_api" json:"cloud_api"`
 	DeletionProtection bool              `codec:"deletion_protection" json:"deletion_protection"`
 	Docker             DockerAPI         `codec:"docker_api" json:"docker_api"`
-	ExitStrategy       string            `codec:"exit_strategy" json:"exit_strategy"`
 	FWEnabled          bool              `codec:"fwenabled" json:"fwenabled"`
-	FWRules            map[string]string `codec:"fwrules" json:"fwrules"`
 	Package            Package           `codec:"package" json:"package"`
 	Tags               map[string]string `codec:"tags" json:"tags"`
 }
@@ -190,10 +187,10 @@ type Network struct {
 }
 
 type DockerAuth struct {
-	Username   string `codec:"username"`
-	Password   string `codec:"password"`
-	Email      string `codec:"email"`
-	ServerAddr string `codec:"server_address"`
+	Username   string `codec:"username" json:"username"`
+	Password   string `codec:"password" json:"password"`
+	Email      string `codec:"email" json:"email"`
+	ServerAddr string `codec:"server_address" json:" server_address"`
 }
 
 type DockerImage struct {
@@ -232,7 +229,7 @@ type DockerAPI struct {
 	TTY            bool              `codec:"tty" json:"tty"`
 	WorkingDir     string            `codec:"workingdir" json:"workingdir"`
 	Image          DockerImage       `codec:"image" json:"image"`
-	Auth           DockerAuth        `codec:"auth"`
+	Auth           DockerAuth        `codec:"auth" json:"auth"`
 	Labels         map[string]string `codec:"labels" json:"labels"`
 	PublicNetwork  string            `codec:"public_network" json:"public_network"`
 	PrivateNetwork string            `codec:"private_network" json:"private_network"`

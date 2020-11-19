@@ -27,17 +27,14 @@ import (
 // This information is needed to rebuild the task state and handler during
 // recovery.
 type TaskState struct {
-	ReattachConfig *pstructs.ReattachConfig
-	TaskConfig     *drivers.TaskConfig
-	StartedAt      time.Time
-
+	TaskConfig *drivers.TaskConfig
+	StartedAt  time.Time
 	// The plugin keeps track of its running tasks in a in-memory data
 	// structure. If the plugin crashes, this data will be lost, so Nomad
 	// will respawn a new instance of the plugin and try to restore its
 	// in-memory representation of the running tasks using the RecoverTask()
 	// method below.
-	InstUUID     string
-	InstanceName string
+	InstUUID string
 }
 
 // Driver is a nomad driver plugin for provisioning instances on triton
@@ -134,7 +131,7 @@ func (d *Driver) SetConfig(cfg *base.Config) error {
 	// Here you can use the config values to initialize any resources that are
 	// shared by all tasks that use this driver, such as a daemon process.
 
-	client, err := d.newTritonClient(d.logger)
+	client, err := d.newTritonClient(d.logger, d.eventer)
 	if err != nil {
 		return fmt.Errorf("failed to create Triton client: %v", err)
 	}
@@ -144,7 +141,7 @@ func (d *Driver) SetConfig(cfg *base.Config) error {
 	return nil
 }
 
-func (d *Driver) newTritonClient(logger hclog.Logger) (tritonClientInterface, error) {
+func (d *Driver) newTritonClient(logger hclog.Logger, eventer *eventer.Eventer) (tritonClientInterface, error) {
 	// Init the Triton Client
 	keyID := triton.GetEnv("KEY_ID")
 	accountName := triton.GetEnv("ACCOUNT")
@@ -223,6 +220,7 @@ func (d *Driver) newTritonClient(logger hclog.Logger) (tritonClientInterface, er
 		},
 		dclient: dockerClient,
 		logger:  logger,
+		eventer: eventer,
 	}, nil
 
 }
@@ -356,6 +354,8 @@ func (d *Driver) StartTask(cfg *drivers.TaskConfig) (*drivers.TaskHandle, *drive
 		return nil, nil, fmt.Errorf("disabled")
 	}
 
+	d.logger.Info("Showing TaskConfig", "TaskConfig", hclog.Fmt("%+v", cfg))
+
 	if _, ok := d.tasks.Get(cfg.ID); ok {
 		return nil, nil, fmt.Errorf("task with ID %q already started", cfg.ID)
 	}
@@ -369,26 +369,11 @@ func (d *Driver) StartTask(cfg *drivers.TaskConfig) (*drivers.TaskHandle, *drive
 	handle := drivers.NewTaskHandle(taskHandleVersion)
 	handle.Config = cfg
 
-	// driver specific mechanism to start the task.
-	//
-	// Once the task is started you will need to store any relevant runtime
-	// information in a taskHandle and TaskState. The taskHandle will be
-	// stored in-memory in the plugin and will be used to interact with the
-	// task.
-	//
-	// The TaskState will be returned to the Nomad client inside a
-	// drivers.TaskHandle instance. This TaskHandle will be sent back to plugin
-	// if the task ever needs to be recovered, so the TaskState should contain
-	// enough information to handle that.
-	//
-	// In the example below we use an executor to fork a process to run our
-	// greeter. The executor is then stored in the handle so we can access it
-	// later and the the plugin.Client is used to generate a reattach
-	// configuration that can be used to recover communication with the task.
-
 	// Create a Triton Task
-	instUUID, driverNetwork, err := d.client.RunTask(context.Background(), cfg, driverConfig)
+	ctx, cancel := context.WithCancel(context.Background())
+	instUUID, driverNetwork, err := d.client.RunTask(ctx, cfg, driverConfig)
 	if err != nil {
+		cancel()
 		return nil, nil, fmt.Errorf("failed to start Triton instance: %v", err)
 	}
 
@@ -400,7 +385,7 @@ func (d *Driver) StartTask(cfg *drivers.TaskConfig) (*drivers.TaskHandle, *drive
 
 	d.logger.Info("triton instance started", "instuuid", driverState.InstUUID, "started_at", driverState.StartedAt)
 
-	h := newTaskHandle(d.logger, d.eventer, driverState, cfg, d.client)
+	h := newTaskHandle(ctx, cancel, d.logger, d.eventer, driverState, cfg, d.client)
 
 	if err := handle.SetDriverState(&driverState); err != nil {
 		d.logger.Error("failed to start task, error setting driver state", "error", err)
@@ -440,23 +425,19 @@ func (d *Driver) RecoverTask(handle *drivers.TaskHandle) error {
 		return fmt.Errorf("failed to decode task state from handle: %v", err)
 	}
 
-	var driverConfig TaskConfig
-	if err := taskState.TaskConfig.DecodeDriverConfig(&driverConfig); err != nil {
-		return fmt.Errorf("failed to decode driver config: %v", err)
-	}
+	ctx, cancel := context.WithCancel(context.Background())
 
-	// driver specific logic to recover a task.
-	//
-	// Recovering a task involves recreating and storing a taskHandle as if the
-	// task was just started.
-	//
-	// In the example below we use the executor to re-attach to the process
-	// that was created when the task first started.
+	_, err := d.client.WaitForInstState(ctx, nil, taskState.InstUUID, tritonInstanceStatusRunning, 60, 5, false)
+	if err != nil {
+		d.logger.Error("failed to get instance state of running", "error", err, "task_id", handle.Config.ID)
+		cancel()
+		return fmt.Errorf("failed to get instance state of running: %v", err)
+	}
 
 	d.logger.Info("triton instance recovered", "instUUID", taskState.InstUUID,
 		"started_at", taskState.StartedAt)
 
-	h := newTaskHandle(d.logger, d.eventer, taskState, handle.Config, d.client)
+	h := newTaskHandle(ctx, cancel, d.logger, d.eventer, taskState, handle.Config, d.client)
 
 	d.tasks.Set(taskState.TaskConfig.ID, h)
 
@@ -479,6 +460,7 @@ func (d *Driver) WaitTask(ctx context.Context, taskID string) (<-chan *drivers.E
 }
 
 func (d *Driver) handleWait(ctx context.Context, handle *taskHandle, ch chan *drivers.ExitResult) {
+	d.logger.Info("Inside handleWait")
 	defer close(ch)
 	// var result *drivers.ExitResult
 
@@ -510,6 +492,7 @@ func (d *Driver) handleWait(ctx context.Context, handle *taskHandle, ch chan *dr
 		return
 	case ch <- result:
 	}
+	d.logger.Info("Returned from handleWait")
 }
 
 // StopTask stops a running task with the given signal and within the timeout window.
@@ -570,6 +553,7 @@ func (d *Driver) DestroyTask(taskID string, force bool) error {
 	handle.stop(false)
 
 	if !handle.detach {
+		d.logger.Info("In Handle.Detach")
 		if err := handle.destroyTask(); err != nil {
 			return err
 		}
@@ -663,9 +647,13 @@ func (d *Driver) SignalTask(taskID string, signal string) error {
 	instUUID := handle.instUUID
 
 	switch signal {
+
+	case handle.templateSignal:
+		d.client.UploadTemplates(context.Background(), instUUID, handle.taskConfig)
+
 	case "reboot":
 		handle.rebooting = true
-		if err := d.client.RebootTask(context.Background(), instUUID); err != nil {
+		if err := d.client.RebootTask(context.Background(), instUUID, handle.taskConfig); err != nil {
 			handle.rebooting = false
 			return err
 		}

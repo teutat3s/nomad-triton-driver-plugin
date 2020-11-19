@@ -1,22 +1,42 @@
 package triton
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/ioutil"
 	"log"
+	"math/rand"
+	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	docker "github.com/fsouza/go-dockerclient"
 	"github.com/gofrs/uuid"
 	hclog "github.com/hashicorp/go-hclog"
+	"github.com/hashicorp/nomad/client/lib/fifo"
+	"github.com/hashicorp/nomad/drivers/shared/eventer"
+	"github.com/hashicorp/nomad/nomad/structs"
 	"github.com/hashicorp/nomad/plugins/drivers"
 	"github.com/joyent/triton-go/compute"
 	"github.com/joyent/triton-go/network"
+	"github.com/mitchellh/mapstructure"
+)
+
+const (
+	JobTypeService         = "service"
+	JobTypeBatch           = "batch"
+	APITypeCloud           = "cloudapi"
+	APITypeDocker          = "dockerapi"
+	DockerRestartNever     = "Never"
+	DockerRestartAlways    = "Always"
+	DockerRestartOnFailure = "OnFailure"
 )
 
 // tritonClientInterface encapsulates all the required AWS functionality to
@@ -31,6 +51,12 @@ type tritonClientInterface interface {
 	// Triton Instance and should be used for health checking.
 	DescribeTaskStatus(ctx context.Context, instUUID string) (string, error)
 
+	// DockerExitCode attempts to return the ExitCode of a Docker Container
+	DockerExitCode(ctx context.Context, instUUID string) (int, error)
+
+	// UploadTemplates attempts to return the ExitCode of a Docker Container
+	UploadTemplates(ctx context.Context, instUUID string, dtc *drivers.TaskConfig) error
+
 	// RunTask is used to trigger the running of a new Triton instance based on the
 	// provided configuration. The UUID of the Instance, as well as any errors are
 	// returned to the caller.
@@ -43,13 +69,17 @@ type tritonClientInterface interface {
 	DestroyTask(ctx context.Context, instUUID string) error
 
 	// DestroyTask stops the running Triton Instance
-	RebootTask(ctx context.Context, instUUID string) error
+	RebootTask(ctx context.Context, instUUID string, dtc *drivers.TaskConfig) error
+
+	// WaitForInstState is used to wait for an instance to be a desired state
+	WaitForInstState(ctx context.Context, cmpt *compute.ComputeClient, id string, state string, timeout int, interval int, execute bool) (*compute.Instance, error)
 }
 
 type tritonClient struct {
 	tclient *Client
 	dclient *docker.Client
 	logger  hclog.Logger
+	eventer *eventer.Eventer
 }
 
 type tritonInstanceInput struct {
@@ -59,6 +89,7 @@ type tritonInstanceInput struct {
 	dockerMdata       map[string]string
 	tritonInput       *compute.CreateInstanceInput
 	apitype           string
+	jobtype           string
 }
 
 // DescribeCluster satisfies the triton.tritonClientInterface DescribeCluster
@@ -84,12 +115,35 @@ func (c tritonClient) DescribeTaskStatus(ctx context.Context, instUUID string) (
 	if err != nil {
 		return "", err
 	}
-	i, _ := cmpt.Instances().Get(ctx, &compute.GetInstanceInput{ID: instUUID})
+	i, _ := cmpt.Instances().Get(ctx, &compute.GetInstanceInput{ID: ToInstanceID(instUUID)})
 	if i == nil {
 		return tritonInstanceStatusUnknown, nil
 	}
 
 	return i.State, nil
+}
+
+// DescribeTaskStatus satisfies the triton.tritonClientInterface DescribeTaskStatus
+// interface function.
+func (c tritonClient) DockerExitCode(ctx context.Context, instUUID string) (int, error) {
+	var current int
+	timeout := 45
+	interval := 5
+
+	for {
+		container, err := c.dclient.InspectContainerWithContext(instUUID, ctx)
+		if err != nil {
+			if current > timeout {
+				errMsg := fmt.Errorf("Timeout exceeded while getting DockerExit Code for Inst: %s.", instUUID)
+				return 0, errMsg
+			}
+			time.Sleep(time.Duration(interval) + time.Second)
+			current = current + interval
+			c.logger.Debug("DockerExitCode", hclog.Fmt("Attempting to get ExitCode Inst: %s.", instUUID))
+		} else {
+			return container.State.ExitCode, nil
+		}
+	}
 }
 
 // RunTask satisfies the triton.tritonClientInterface RunTask interface function.
@@ -118,7 +172,7 @@ func (c tritonClient) RunTask(ctx context.Context, dtc *drivers.TaskConfig, cfg 
 			return "", nil, err
 		}
 
-		inst, err := c.waitForInstState(cmpt, i.ID, tritonInstanceStatusRunning, 60, 5)
+		inst, err := c.WaitForInstState(ctx, cmpt, i.ID, tritonInstanceStatusRunning, 60, 5, false)
 		if err != nil {
 			return "", nil, err
 		}
@@ -127,7 +181,7 @@ func (c tritonClient) RunTask(ctx context.Context, dtc *drivers.TaskConfig, cfg 
 		instanceID = i.ID
 	}
 
-	if input.apitype == "dockerapi" {
+	if input.apitype == APITypeDocker {
 		// If AutoPull is enabled, pull the image.
 		if cfg.Docker.Image.AutoPull == true {
 			err := c.dclient.PullImage(
@@ -145,11 +199,10 @@ func (c tritonClient) RunTask(ctx context.Context, dtc *drivers.TaskConfig, cfg 
 			return "", nil, err
 		}
 		// overRide get instance with docker instance id
-		instanceID = fmt.Sprintf("%s-%s-%s-%s-%s", i.ID[0:8], i.ID[8:12], i.ID[12:16], i.ID[16:20], i.ID[20:32])
-
+		instanceID = i.ID
 		// Create Container Blocks,  but lets poll anyway
 		// wait for instance to be provisioned.  we land in the "stopped" state before being able to start
-		_, err = c.waitForInstState(cmpt, instanceID, tritonInstanceStatusStopped, 60, 5)
+		_, err = c.WaitForInstState(ctx, cmpt, instanceID, tritonInstanceStatusStopped, 60, 5, false)
 		if err != nil {
 			return "", nil, err
 		}
@@ -176,12 +229,18 @@ func (c tritonClient) RunTask(ctx context.Context, dtc *drivers.TaskConfig, cfg 
 			}
 		}
 
+		// Handle Loggings
+		go c.getDockerLogs(ctx, i.ID, dtc)
+
 		// Start the Docker Container
 		c.dclient.StartContainer(i.ID, i.HostConfig)
-		inst, err := c.waitForInstState(cmpt, instanceID, tritonInstanceStatusRunning, 5, 5)
+		inst, err := c.WaitForInstState(ctx, cmpt, instanceID, tritonInstanceStatusRunning, 5, 5, false)
 		if err != nil {
 			return "", nil, err
 		}
+		// Handle Initial Template Upload
+		c.UploadTemplates(ctx, i.ID, dtc)
+
 		primaryIP = inst.PrimaryIP
 	}
 
@@ -201,17 +260,182 @@ func (c tritonClient) RunTask(ctx context.Context, dtc *drivers.TaskConfig, cfg 
 	}, nil
 }
 
+func (c tritonClient) UploadTemplates(ctx context.Context, id string, dtc *drivers.TaskConfig) error {
+
+	// TODO: Handle EnvVars
+	ds := make(map[string][]*structs.Template)
+
+	taskPath := dtc.AllocDir + "/" + dtc.Name + "/"
+
+	// Group Template Files by Destination Directory
+	for _, template := range dtc.Templates {
+		d := filepath.Dir(template.DestPath)
+		ds[d] = append(ds[d], template)
+	}
+
+	// Upload To Destination
+	for dest, _ := range ds {
+		// Create a buffer to write archive to.
+		buf := new(bytes.Buffer)
+		// Create a new tar archive.
+		tw := tar.NewWriter(buf)
+		defer tw.Close()
+
+		for _, destCommon := range ds[dest] {
+			// Add the files
+			path := taskPath + destCommon.DestPath
+			content, err := ioutil.ReadFile(path)
+			if err != nil {
+				c.eventer.EmitEvent(
+					&drivers.TaskEvent{
+						TaskID:    dtc.ID,
+						TaskName:  dtc.Name,
+						AllocID:   dtc.AllocID,
+						Timestamp: time.Now(),
+						Message:   fmt.Sprintf("Template: %s was not found.", destCommon.DestPath),
+					})
+				return err
+			}
+			perms, err := strconv.Atoi(destCommon.Perms)
+			if err != nil {
+				return err
+			}
+			mode, err := fmt.Printf("%01d", perms)
+			if err != nil {
+				return err
+			}
+			hdr := &tar.Header{
+				Name: filepath.Base(destCommon.DestPath),
+				Mode: int64(mode),
+				Size: int64(len(content)),
+			}
+			err = tw.WriteHeader(hdr)
+			if err != nil {
+				return err
+			}
+			_, err = tw.Write(content)
+			if err != nil {
+				return err
+			}
+		}
+		tw.Close()
+
+		var current int
+		timeout := 45
+		interval := 5
+		for {
+			err := c.dclient.UploadToContainer(id, docker.UploadToContainerOptions{
+				InputStream:          buf,
+				Path:                 dest,
+				NoOverwriteDirNonDir: true,
+				Context:              context.Background(),
+			})
+			if err != nil {
+				if current > timeout {
+					return fmt.Errorf("Timeout exceeded while Uploading Templates Inst: %s.", id)
+				}
+				time.Sleep(time.Duration(interval) + time.Second)
+				current = current + interval
+				c.logger.Warn("UploadTemplates", hclog.Fmt("Attempting to Upload Template Inst: %s.", id))
+			} else {
+				break
+			}
+		}
+	}
+
+	return nil
+}
+
+func ToInstanceID(id string) string {
+	if len(id) != 64 {
+		return id
+	}
+	return fmt.Sprintf("%s-%s-%s-%s-%s", id[0:8], id[8:12], id[12:16], id[16:20], id[20:32])
+}
+
+func (c tritonClient) getDockerLogs(ctx context.Context, id string, dtc *drivers.TaskConfig) {
+	stdout, _ := fifo.OpenWriter(dtc.StdoutPath)
+	stderr, _ := fifo.OpenWriter(dtc.StderrPath)
+
+	if ctx.Err() != nil {
+		stdout.Close()
+		stderr.Close()
+	}
+
+	logCtx, logCancel := context.WithCancel(context.Background())
+
+	backoff := 0.0
+
+	logOpts := docker.LogsOptions{
+		Context:      logCtx,
+		Container:    id,
+		OutputStream: stdout,
+		ErrorStream:  stderr,
+		Follow:       true,
+		Stdout:       true,
+		Stderr:       true,
+		Tail:         "0",
+	}
+
+	go func() {
+		for {
+			err := c.dclient.Logs(logOpts)
+			if err == nil {
+				backoff = 0.0
+			} else if err != nil {
+				backoff = nextBackoff(backoff)
+				c.logger.Error("log streaming ended with error", "error", err, "retry_in", backoff)
+				time.Sleep(time.Duration(backoff) * time.Second)
+			}
+		}
+	}()
+
+	// block and wait for cancel
+	select {
+	case <-ctx.Done():
+		c.WaitForInstState(logCtx, nil, ToInstanceID(id), tritonInstanceStatusDeleted, 60, 5, false)
+		stdout.Close()
+		stderr.Close()
+		logCancel()
+		return
+	}
+}
+
+// nextBackoff returns the next backoff period in seconds given current backoff
+func nextBackoff(backoff float64) float64 {
+	if backoff < 0.5 {
+		backoff = 0.5
+	}
+
+	backoff = backoff * 1.15 * (1.0 + rand.Float64())
+	if backoff > 120 {
+		backoff = 120
+	} else if backoff < 0.5 {
+		backoff = 0.5
+	}
+
+	return backoff
+}
+
 // buildTaskInput is used to convert the jobspec supplied configuration input
 // into the appropriate triton.RunTaskInput object.
 func (c tritonClient) buildTaskInput(ctx context.Context, dtc *drivers.TaskConfig, cfg TaskConfig) (*tritonInstanceInput, error) {
 	c.logger.Info("building input for triton instance", "TaskConfig", hclog.Fmt("%+v", cfg))
+	c.logger.Info("building input for triton instance", "DriversConfig", hclog.Fmt("%+v", dtc))
 
 	var input *tritonInstanceInput
 	// An Instance must be for CloudAPI or DockerAPI.  Check to make sure both are not configured
 	// in our hclConfig.  Images must be provided for both APIs so we can use that to compare
 	if cfg.Cloud.Image.Name != "" && cfg.Docker.Image.Name != "" {
 		return nil, fmt.Errorf("triton driver config can only deploy to either CloudAPI or Docker.")
+	}
 
+	if dtc.JobType == JobTypeBatch && cfg.Cloud.Image.Name != "" {
+		return nil, errors.New("CloudAPI does not currently support batch jobs")
+	}
+
+	if dtc.JobType == JobTypeBatch && cfg.Docker.Image.Name != "" {
+		cfg.Docker.RestartPolicy = DockerRestartNever
 	}
 
 	// Build Inputs. No Instance Provisioning or Image Pulling takes place here.
@@ -459,16 +683,8 @@ func (c tritonClient) buildDockerAPIInput(ctx context.Context, dtc *drivers.Task
 
 // StopTask satisfies the triton.tritonClientInterface StopTask interface function.
 func (c tritonClient) StopTask(ctx context.Context, instUUID string) error {
-	cmpt, err := c.tclient.Compute()
-	if err != nil {
-		return err
-	}
-
 	// Stop the Instance
-	if err := cmpt.Instances().Stop(ctx, &compute.StopInstanceInput{InstanceID: instUUID}); err != nil {
-		return err
-	}
-	_, err = c.waitForInstState(cmpt, instUUID, "stopped", 60, 5)
+	_, err := c.WaitForInstState(ctx, nil, instUUID, tritonInstanceStatusStopped, 60, 5, true)
 	if err != nil {
 		return err
 	}
@@ -478,46 +694,45 @@ func (c tritonClient) StopTask(ctx context.Context, instUUID string) error {
 
 // DestroyTask satisfies the triton.tritonClientInterface DestroyTask interface function.
 func (c tritonClient) DestroyTask(ctx context.Context, instUUID string) error {
-	cmpt, err := c.tclient.Compute()
-	if err != nil {
-		return err
-	}
-
+	c.logger.Info("In DestroyTask client")
 	// Delete the Instance
-	if err := cmpt.Instances().Delete(ctx, &compute.DeleteInstanceInput{ID: instUUID}); err != nil {
-		return err
-	}
-	_, err = c.waitForInstState(cmpt, instUUID, "deleted", 60, 5)
+	_, err := c.WaitForInstState(ctx, nil, instUUID, tritonInstanceStatusDeleted, 60, 5, true)
 	if err != nil {
 		return err
 	}
 
+	c.logger.Info("returned from DestroyTask Client")
 	return nil
 }
 
 // RebootTask satisfies the triton.tritonClientInterface RebootTask interface function.
-func (c tritonClient) RebootTask(ctx context.Context, instUUID string) error {
-	cmpt, err := c.tclient.Compute()
+func (c tritonClient) RebootTask(ctx context.Context, instUUID string, dtc *drivers.TaskConfig) error {
+	annotations := make(map[string]string)
+	err := mapstructure.Decode(&RebootTask{
+		InstanceUUID: instUUID,
+	}, &annotations)
 	if err != nil {
-		return err
+		c.logger.Error("Failed to Decode Annotations", err)
 	}
+	c.eventer.EmitEvent(
+		&drivers.TaskEvent{
+			TaskID:         dtc.ID,
+			TaskName:       dtc.Name,
+			AllocID:        dtc.AllocID,
+			Timestamp:      time.Now(),
+			DisplayMessage: fmt.Sprintf("RebootTask: Instance %s is rebooting.", instUUID),
+			Message:        fmt.Sprintf("RebootTask"),
+			Annotations:    annotations,
+		})
 
 	// Stop the Instance
-	if err := cmpt.Instances().Stop(ctx, &compute.StopInstanceInput{InstanceID: instUUID}); err != nil {
-		return err
-	}
-	_, err = c.waitForInstState(cmpt, instUUID, "stopped", 60, 3)
+	_, err := c.WaitForInstState(ctx, nil, instUUID, tritonInstanceStatusStopped, 60, 3, true)
 	if err != nil {
 		return err
 	}
 
-	if err := cmpt.Instances().Start(ctx, &compute.StartInstanceInput{InstanceID: instUUID}); err != nil {
-	}
 	// Start the Instance
-	if err := cmpt.Instances().Start(ctx, &compute.StartInstanceInput{InstanceID: instUUID}); err != nil {
-		return err
-	}
-	_, err = c.waitForInstState(cmpt, instUUID, "running", 60, 3)
+	_, err = c.WaitForInstState(ctx, nil, instUUID, tritonInstanceStatusRunning, 60, 3, true)
 	if err != nil {
 		return err
 	}
@@ -726,15 +941,49 @@ func dockerImageRef(repo string, tag string) string {
 	return fmt.Sprintf("%s:%s", repo, tag)
 }
 
-func (c *tritonClient) waitForInstState(cmpt *compute.ComputeClient, uuid string, state string, timeout int, interval int) (*compute.Instance, error) {
+func (c tritonClient) WaitForInstState(ctx context.Context, cmpt *compute.ComputeClient, id string, state string, timeout int, interval int, execute bool) (*compute.Instance, error) {
 	var current int
 	var instance *compute.Instance
+	uuid := ToInstanceID(id)
+
+	if cmpt == nil {
+		c, err := c.tclient.Compute()
+		if err != nil {
+			return nil, err
+		}
+		cmpt = c
+	}
+
+	if execute {
+		for {
+			var err error
+			switch state {
+			case "running":
+				err = cmpt.Instances().Start(ctx, &compute.StartInstanceInput{InstanceID: uuid})
+			case "stopped":
+				err = cmpt.Instances().Stop(ctx, &compute.StopInstanceInput{InstanceID: uuid})
+			case "deleted":
+				err = cmpt.Instances().Delete(ctx, &compute.DeleteInstanceInput{ID: uuid})
+			}
+			if err != nil {
+				if current > timeout {
+					errMsg := fmt.Errorf("Timeout exceeded while waiting for Inst: %s to be State: %s", uuid, state)
+					return nil, errMsg
+				}
+				time.Sleep(time.Duration(interval) * time.Second)
+				current = current + interval
+			}
+			current = 0
+			break
+		}
+	}
 	for {
 		running, _ := cmpt.Instances().Get(context.Background(), &compute.GetInstanceInput{ID: uuid})
 		if running != nil {
+			c.logger.Debug("WaitForInstState", hclog.Fmt("run state: %s state: %s.", running.State, state))
 			if running.State == state {
 				instance = running
-				break
+				return instance, nil
 			}
 			if current > timeout {
 				errMsg := fmt.Errorf("Timeout exceeded while waiting for Inst: %s to be State: %s", uuid, state)
@@ -742,7 +991,17 @@ func (c *tritonClient) waitForInstState(cmpt *compute.ComputeClient, uuid string
 			}
 			time.Sleep(time.Duration(interval) * time.Second)
 			current = current + interval
+			c.logger.Debug("WaitForInstState", hclog.Fmt("Waiting for Inst: %s to be at Desired State: %s.", uuid, state))
 		}
 	}
-	return instance, nil
+}
+
+type StateChange struct {
+	PreviousState string `json:"previous_state"`
+	CurrentState  string `json:"current_state"`
+	InstanceUUID  string `json:"instance_uuid"`
+}
+
+type RebootTask struct {
+	InstanceUUID string `json:"instance_uuid"`
 }

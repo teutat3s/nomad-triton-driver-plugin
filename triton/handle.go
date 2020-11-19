@@ -7,10 +7,10 @@ import (
 	"time"
 
 	hclog "github.com/hashicorp/go-hclog"
-	"github.com/hashicorp/nomad/client/lib/fifo"
 	"github.com/hashicorp/nomad/client/stats"
 	"github.com/hashicorp/nomad/drivers/shared/eventer"
 	"github.com/hashicorp/nomad/plugins/drivers"
+	"github.com/mitchellh/mapstructure"
 )
 
 const (
@@ -36,12 +36,13 @@ type taskHandle struct {
 	// stateLock syncs access to all fields below
 	stateLock sync.RWMutex
 
-	taskConfig  *drivers.TaskConfig
-	procState   drivers.TaskState
-	startedAt   time.Time
-	completedAt time.Time
-	exitResult  *drivers.ExitResult
-	doneCh      chan struct{}
+	templateSignal string
+	taskConfig     *drivers.TaskConfig
+	procState      drivers.TaskState
+	startedAt      time.Time
+	completedAt    time.Time
+	exitResult     *drivers.ExitResult
+	doneCh         chan struct{}
 
 	// detach from ecs task instead of killing it if true.
 	detach    bool
@@ -51,24 +52,29 @@ type taskHandle struct {
 	cancel context.CancelFunc
 }
 
-func newTaskHandle(logger hclog.Logger, eventer *eventer.Eventer, ts TaskState, taskConfig *drivers.TaskConfig, tritonClient tritonClientInterface) *taskHandle {
-	ctx, cancel := context.WithCancel(context.Background())
+func newTaskHandle(ctx context.Context, cancel context.CancelFunc, logger hclog.Logger, eventer *eventer.Eventer, ts TaskState, taskConfig *drivers.TaskConfig, tritonClient tritonClientInterface) *taskHandle {
 	logger = logger.Named("handle").With("instuuid", ts.InstUUID)
+	templateSignal := "unset"
+
+	if len(taskConfig.Templates) > 0 {
+		templateSignal = taskConfig.Templates[0].ChangeSignal
+	}
 
 	h := &taskHandle{
-		instUUID:     ts.InstUUID,
-		tritonClient: tritonClient,
-		taskConfig:   taskConfig,
-		procState:    drivers.TaskStateRunning,
-		startedAt:    ts.StartedAt,
-		exitResult:   &drivers.ExitResult{},
-		logger:       logger,
-		eventer:      eventer,
-		doneCh:       make(chan struct{}),
-		detach:       false,
-		rebooting:    false,
-		ctx:          ctx,
-		cancel:       cancel,
+		instUUID:       ts.InstUUID,
+		tritonClient:   tritonClient,
+		taskConfig:     taskConfig,
+		procState:      drivers.TaskStateRunning,
+		startedAt:      ts.StartedAt,
+		exitResult:     &drivers.ExitResult{},
+		logger:         logger,
+		eventer:        eventer,
+		templateSignal: templateSignal,
+		doneCh:         make(chan struct{}),
+		detach:         false,
+		rebooting:      false,
+		ctx:            ctx,
+		cancel:         cancel,
 	}
 
 	return h
@@ -98,6 +104,7 @@ func (h *taskHandle) IsRunning() bool {
 }
 
 func (h *taskHandle) run() {
+	ExitCode := 0
 	defer close(h.doneCh)
 	h.stateLock.Lock()
 	if h.exitResult == nil {
@@ -107,33 +114,32 @@ func (h *taskHandle) run() {
 	// prevStatus is used for Emitting Status changes.
 	prevStatus := tritonInstanceStatusUnknown
 
-	// Open the tasks StdoutPath so we can write task health status updates.
-	f, err := fifo.OpenWriter(h.taskConfig.StdoutPath)
-	if err != nil {
-		h.handleRunError(err, "failed to open task stdout path")
-		return
-	}
-
-	// Run the deferred close in an anonymous routine so we can see any errors.
-	defer func() {
-		if err := f.Close(); err != nil {
-			h.logger.Error("failed to close task stdout handle correctly", "error", err)
-		}
-	}()
-
 	// Block until stopped.
 	for h.ctx.Err() == nil {
 		select {
 		case <-time.After(5 * time.Second):
+			h.logger.Info("Polling Instance")
 			status, err := h.tritonClient.DescribeTaskStatus(h.ctx, h.instUUID)
 			if prevStatus != status {
+				annotations := make(map[string]string)
+				err := mapstructure.Decode(&StateChange{
+					PreviousState: prevStatus,
+					CurrentState:  status,
+					InstanceUUID:  h.instUUID,
+				}, &annotations)
+				if err != nil {
+					h.logger.Error("Failed to Decode Annotations", err)
+				}
+
 				h.eventer.EmitEvent(
 					&drivers.TaskEvent{
-						TaskID:    h.taskConfig.ID,
-						TaskName:  h.taskConfig.Name,
-						AllocID:   h.taskConfig.AllocID,
-						Timestamp: time.Now(),
-						Message:   fmt.Sprintf("Alloc Status changed from %s to %s.", prevStatus, status),
+						TaskID:         h.taskConfig.ID,
+						TaskName:       h.taskConfig.Name,
+						AllocID:        h.taskConfig.AllocID,
+						Timestamp:      time.Now(),
+						Message:        fmt.Sprintf("StateChange"),
+						DisplayMessage: fmt.Sprintf("Instance: %s, StatusChange from %s to %s.", h.instUUID, prevStatus, status),
+						Annotations:    annotations,
 					})
 
 				prevStatus = status
@@ -143,26 +149,23 @@ func (h *taskHandle) run() {
 				return
 			}
 
-			// Write the health status before checking what it is ensures the
-			// alloc logs include the health during the Triton instance terminal
-			// phase.
-			now := time.Now().Format(time.RFC3339)
-			if _, err := fmt.Fprintf(f, "[%s] - client is remotely monitoring Triton instance: %v with status %v\n",
-				now, h.instUUID, status); err != nil {
-				h.handleRunError(err, "failed to write to stdout")
-			}
-
 			// Triton instance has terminal status phase, meaning the task is going to
 			// stop. If we are in this phase, the driver should exit and pass
-			// this to the servers so that a new allocation, and ECS task can
+			// this to the servers so that a new allocation, and Triton task can
 			// be started.
-			//if status == tritonInstanceStatusProvisining || status == tritonInstanceStatusStopping ||
-			//status == tritonInstanceStatusDeleted || status == tritonInstanceStatusStopped {
-			//h.handleRunError(fmt.Errorf("Triton instance status in terminal phase"), "task status: "+status)
-			//return
-			//}
+			h.logger.Info("Instance Status: %s", status)
 			if !h.rebooting {
 				if status == tritonInstanceStatusStopped {
+					// If we must get the for the job to exit and get its exit code
+					if h.taskConfig.JobType == JobTypeBatch {
+						ec, err := h.tritonClient.DockerExitCode(h.ctx, h.instUUID)
+						if err != nil {
+							h.handleRunError(err, "Couldn't Get ExitCode")
+						}
+						ExitCode = ec
+						h.ctx.Done()
+						goto EXITCODES
+					}
 					h.handleRunError(fmt.Errorf("Triton instance status in terminal phase"), "task status: "+status)
 					return
 				}
@@ -173,9 +176,6 @@ func (h *taskHandle) run() {
 		}
 	}
 
-	h.stateLock.Lock()
-	defer h.stateLock.Unlock()
-
 	// Only stop task if we're not detaching.
 	if !h.detach {
 		if err := h.stopTask(); err != nil {
@@ -184,8 +184,12 @@ func (h *taskHandle) run() {
 		}
 	}
 
+EXITCODES:
+	h.stateLock.Lock()
+	defer h.stateLock.Unlock()
+
 	h.procState = drivers.TaskStateExited
-	h.exitResult.ExitCode = 0
+	h.exitResult.ExitCode = ExitCode
 	h.exitResult.Signal = 0
 	h.completedAt = time.Now()
 }
@@ -219,50 +223,17 @@ func (h *taskHandle) stopTask() error {
 	if err := h.tritonClient.StopTask(context.TODO(), h.instUUID); err != nil {
 		return err
 	}
-
-	for {
-		select {
-		case <-time.After(5 * time.Second):
-			status, err := h.tritonClient.DescribeTaskStatus(context.TODO(), h.instUUID)
-			if err != nil {
-				return err
-			}
-
-			// Check whether the status is in its final state, and log to provide
-			// operator visibility.
-			if status == tritonInstanceStatusStopped {
-				h.logger.Info("triton instance has successfully been stopped")
-				return nil
-			}
-			h.logger.Debug("continuing to monitor triton instance shutdown", "status", status)
-		}
-	}
+	return nil
 }
 
 // stopTask is used to stop the Triton instance, and monitor its status until it
 // reaches the stopped state.
 func (h *taskHandle) destroyTask() error {
+	h.logger.Info("Inside destroyTask")
 	if err := h.tritonClient.DestroyTask(context.TODO(), h.instUUID); err != nil {
 		return err
 	}
 
-	for {
-		select {
-		case <-time.After(5 * time.Second):
-			status, err := h.tritonClient.DescribeTaskStatus(context.TODO(), h.instUUID)
-			if err != nil {
-				return err
-			}
-
-			// Check whether the status is in its final state, and log to provide
-			// operator visibility.
-			if status == tritonInstanceStatusDeleted {
-				h.logger.Info("triton instance has successfully been destroyed")
-				return nil
-			}
-			h.logger.Debug("continuing to monitor triton instance destruction", "status", status)
-		}
-	}
-
+	h.logger.Info("triton instance has successfully been destroyed")
 	return nil
 }
