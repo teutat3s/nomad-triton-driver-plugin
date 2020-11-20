@@ -726,7 +726,7 @@ func (c tritonClient) RebootTask(ctx context.Context, instUUID string, dtc *driv
 		})
 
 	// Stop the Instance
-	_, err := c.WaitForInstState(ctx, nil, instUUID, tritonInstanceStatusStopped, 60, 3, true)
+	_, err = c.WaitForInstState(ctx, nil, instUUID, tritonInstanceStatusStopped, 60, 3, true)
 	if err != nil {
 		return err
 	}
