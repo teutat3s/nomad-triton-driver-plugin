@@ -22,11 +22,11 @@ require (
 	github.com/hashicorp/nomad v0.12.5
 	github.com/hashicorp/serf v0.9.4 // indirect
 	github.com/joyent/triton-go v1.8.5
+	github.com/kr/pretty v0.2.1 // indirect
 	github.com/kr/pty v1.1.8 // indirect
 	github.com/mattn/go-colorable v0.1.7 // indirect
 	github.com/mitchellh/go-testing-interface v1.0.4 // indirect
 	github.com/mitchellh/mapstructure v1.3.3
-	github.com/ryboe/q v1.0.12
 	github.com/stretchr/testify v1.6.1
 	github.com/zclconf/go-cty v1.4.2 // indirect
 	golang.org/x/text v0.3.3 // indirect
