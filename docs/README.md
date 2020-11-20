@@ -56,7 +56,6 @@
 		"affinity":            hclspec.NewAttr("affinity", "list(string)", false),
 		"deletion_protection": hclspec.NewAttr("deletion_protection", "bool", false),
 		"fwenabled":           hclspec.NewAttr("fwenabled", "bool", false),
-		"fwrules":             hclspec.NewBlockAttrs("fwrules", "string", false),
 		"cns":                 hclspec.NewAttr("cns", "list(string)", false),
 		"package": hclspec.NewBlock("package", true, hclspec.NewObject(map[string]*hclspec.Spec{
 			"name":    hclspec.NewAttr("name", "string", false),
@@ -449,15 +448,6 @@ deletion_protection = false
 A bool specifying whether to enable the firewall for the instance on Triton.
 ```
 fwenabled = false
-```
-#### fwrules _map[string]string_
-A map of string specifying the firewall rules to use while provisioning an instance on Triton.
-```
-fwrules = {
-  anytoconsului = "FROM any TO tag consul ALLOW tcp (PORT 22 AND PORT 8500)"
-  consultcp     = "FROM tag consul TO tag consul ALLOW tcp PORT all"
-  consuludp     = "FROM tag consul TO tag consul ALLOW udp PORT all"
-}
 ```
 #### cns _[]string_
 A list of string specifying the cns service names to use while provisioning an instance on Triton.

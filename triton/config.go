@@ -139,7 +139,6 @@ var (
 		"affinity":            hclspec.NewAttr("affinity", "list(string)", false),
 		"deletion_protection": hclspec.NewAttr("deletion_protection", "bool", false),
 		"fwenabled":           hclspec.NewAttr("fwenabled", "bool", false),
-		"fwrules":             hclspec.NewBlockAttrs("fwrules", "string", false),
 		"cns":                 hclspec.NewAttr("cns", "list(string)", false),
 		"package": hclspec.NewBlock("package", true, hclspec.NewObject(map[string]*hclspec.Spec{
 			"name":    hclspec.NewAttr("name", "string", false),

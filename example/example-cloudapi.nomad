@@ -65,10 +65,6 @@ job "bhyve" {
         tags = {
           fwtag = "true"
         }
-
-        fwrules = {
-          fwrule0 = "FROM any TO tag fwtag ALLOW tcp PORT 22"
-        }
       }
 
       env {

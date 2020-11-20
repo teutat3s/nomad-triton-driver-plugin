@@ -83,12 +83,6 @@ job "redis" {
         tags = {
           redis = "true"
         }
-
-        fwrules {
-          anytoredis = "FROM any TO tag redis ALLOW tcp PORT 6379"
-          redistcp   = "FROM tag redis TO tag redis ALLOW tcp PORT all"
-          redisudp   = "FROM tag redis TO tag redis ALLOW udp PORT all"
-        }
       }
 
       env {
