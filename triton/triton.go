@@ -115,7 +115,7 @@ func (c tritonClient) DescribeTaskStatus(ctx context.Context, instUUID string) (
 	if err != nil {
 		return "", err
 	}
-	i, _ := cmpt.Instances().Get(ctx, &compute.GetInstanceInput{ID: ToInstanceID(instUUID)})
+	i, _ := cmpt.Instances().Get(ctx, &compute.GetInstanceInput{ID: toInstanceUUID(instUUID)})
 	if i == nil {
 		return tritonInstanceStatusUnknown, nil
 	}
@@ -150,8 +150,10 @@ func (c tritonClient) DockerExitCode(ctx context.Context, instUUID string) (int,
 func (c tritonClient) RunTask(ctx context.Context, dtc *drivers.TaskConfig, cfg TaskConfig) (string, *drivers.DriverNetwork, error) {
 	c.logger.Info("In_RunTask")
 
-	// instanceID Is used for query a deployed instance for both dockerapi and cloudapi
+	// instanceID is used for querying a deployed instance via CloudAPI
 	var instanceID string
+	// containerID is used for querying a deployed container via DockerAPI
+	var containerID string
 	// primaryIP is used for advertising the instance address via DriverNetwork
 	var primaryIP string
 
@@ -198,8 +200,9 @@ func (c tritonClient) RunTask(ctx context.Context, dtc *drivers.TaskConfig, cfg 
 		if err != nil {
 			return "", nil, err
 		}
-		// overRide get instance with docker instance id
-		instanceID = i.ID
+		// Set IDs for dockerAPI and cloudAPI queries
+		containerID = i.ID
+		instanceID = toInstanceUUID(containerID)
 		// Create Container Blocks,  but lets poll anyway
 		// wait for instance to be provisioned.  we land in the "stopped" state before being able to start
 		_, err = c.WaitForInstState(ctx, cmpt, instanceID, tritonInstanceStatusStopped, 60, 5, false)
@@ -230,16 +233,16 @@ func (c tritonClient) RunTask(ctx context.Context, dtc *drivers.TaskConfig, cfg 
 		}
 
 		// Handle Loggings
-		go c.getDockerLogs(ctx, i.ID, dtc)
+		go c.getDockerLogs(ctx, containerID, dtc)
 
 		// Start the Docker Container
-		c.dclient.StartContainer(i.ID, i.HostConfig)
+		c.dclient.StartContainer(containerID, i.HostConfig)
 		inst, err := c.WaitForInstState(ctx, cmpt, instanceID, tritonInstanceStatusRunning, 5, 5, false)
 		if err != nil {
 			return "", nil, err
 		}
 		// Handle Initial Template Upload
-		c.UploadTemplates(ctx, i.ID, dtc)
+		c.UploadTemplates(ctx, containerID, dtc)
 
 		primaryIP = inst.PrimaryIP
 	}
@@ -346,7 +349,7 @@ func (c tritonClient) UploadTemplates(ctx context.Context, id string, dtc *drive
 	return nil
 }
 
-func ToInstanceID(id string) string {
+func toInstanceUUID(id string) string {
 	if len(id) != 64 {
 		return id
 	}
@@ -393,7 +396,7 @@ func (c tritonClient) getDockerLogs(ctx context.Context, id string, dtc *drivers
 	// block and wait for cancel
 	select {
 	case <-ctx.Done():
-		c.WaitForInstState(logCtx, nil, ToInstanceID(id), tritonInstanceStatusDeleted, 60, 5, false)
+		c.WaitForInstState(logCtx, nil, id, tritonInstanceStatusDeleted, 60, 5, false)
 		stdout.Close()
 		stderr.Close()
 		logCancel()
@@ -949,7 +952,7 @@ func dockerImageRef(repo string, tag string) string {
 func (c tritonClient) WaitForInstState(ctx context.Context, cmpt *compute.ComputeClient, id string, state string, timeout int, interval int, execute bool) (*compute.Instance, error) {
 	var current int
 	var instance *compute.Instance
-	uuid := ToInstanceID(id)
+	uuid := toInstanceUUID(id)
 
 	if cmpt == nil {
 		c, err := c.tclient.Compute()
