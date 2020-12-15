@@ -115,7 +115,7 @@ func (c tritonClient) DescribeTaskStatus(ctx context.Context, instUUID string) (
 	if err != nil {
 		return "", err
 	}
-	i, _ := cmpt.Instances().Get(ctx, &compute.GetInstanceInput{ID: ToInstanceID(instUUID)})
+	i, _ := cmpt.Instances().Get(ctx, &compute.GetInstanceInput{ID: toInstanceUUID(instUUID)})
 	if i == nil {
 		return tritonInstanceStatusUnknown, nil
 	}
@@ -210,7 +210,7 @@ func (c tritonClient) RunTask(ctx context.Context, dtc *drivers.TaskConfig, cfg 
 		// Triton DockerAPI doesn't allow for Tag Placement, Update via CloudAPI
 		if len(cfg.Tags) > 0 {
 			err = cmpt.Instances().AddTags(ctx, &compute.AddTagsInput{
-				ID:   instanceID,
+				ID:   toInstanceUUID(instanceID),
 				Tags: cfg.Tags,
 			})
 			if err != nil {
@@ -221,7 +221,7 @@ func (c tritonClient) RunTask(ctx context.Context, dtc *drivers.TaskConfig, cfg 
 		if len(input.dockerMdata) > 0 {
 			// Triton DockerAPI doesn't allow for Metadata Placement, Update via CloudAPI
 			_, err = cmpt.Instances().UpdateMetadata(ctx, &compute.UpdateMetadataInput{
-				ID:       instanceID,
+				ID:       toInstanceUUID(instanceID),
 				Metadata: input.dockerMdata,
 			})
 			if err != nil {
@@ -346,7 +346,7 @@ func (c tritonClient) UploadTemplates(ctx context.Context, id string, dtc *drive
 	return nil
 }
 
-func ToInstanceID(id string) string {
+func toInstanceUUID(id string) string {
 	if len(id) != 64 {
 		return id
 	}
@@ -393,7 +393,7 @@ func (c tritonClient) getDockerLogs(ctx context.Context, id string, dtc *drivers
 	// block and wait for cancel
 	select {
 	case <-ctx.Done():
-		c.WaitForInstState(logCtx, nil, ToInstanceID(id), tritonInstanceStatusDeleted, 60, 5, false)
+		c.WaitForInstState(logCtx, nil, toInstanceUUID(id), tritonInstanceStatusDeleted, 60, 5, false)
 		stdout.Close()
 		stderr.Close()
 		logCancel()
@@ -949,7 +949,7 @@ func dockerImageRef(repo string, tag string) string {
 func (c tritonClient) WaitForInstState(ctx context.Context, cmpt *compute.ComputeClient, id string, state string, timeout int, interval int, execute bool) (*compute.Instance, error) {
 	var current int
 	var instance *compute.Instance
-	uuid := ToInstanceID(id)
+	uuid := toInstanceUUID(id)
 
 	if cmpt == nil {
 		c, err := c.tclient.Compute()
