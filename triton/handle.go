@@ -137,7 +137,7 @@ func (h *taskHandle) run() {
 						TaskName:       h.taskConfig.Name,
 						AllocID:        h.taskConfig.AllocID,
 						Timestamp:      time.Now(),
-						Message:        fmt.Sprintf("StateChange"),
+						Message:        "StateChange",
 						DisplayMessage: fmt.Sprintf("Instance: %s, StatusChange from %s to %s.", h.instUUID, prevStatus, status),
 						Annotations:    annotations,
 					})
@@ -166,7 +166,7 @@ func (h *taskHandle) run() {
 						h.ctx.Done()
 						goto EXITCODES
 					}
-					h.handleRunError(fmt.Errorf("Triton instance status in terminal phase"), "task status: "+status)
+					h.handleRunError(fmt.Errorf("triton instance status in terminal phase"), "task status: "+status)
 					return
 				}
 			}

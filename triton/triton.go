@@ -134,12 +134,12 @@ func (c tritonClient) DockerExitCode(ctx context.Context, instUUID string) (int,
 		container, err := c.dclient.InspectContainerWithContext(instUUID, ctx)
 		if err != nil {
 			if current > timeout {
-				errMsg := fmt.Errorf("Timeout exceeded while getting DockerExit Code for Inst: %s.", instUUID)
+				errMsg := fmt.Errorf("timeout exceeded while getting DockerExitCode for inst: %s", instUUID)
 				return 0, errMsg
 			}
 			time.Sleep(time.Duration(interval) + time.Second)
 			current = current + interval
-			c.logger.Debug("DockerExitCode", hclog.Fmt("Attempting to get ExitCode Inst: %s.", instUUID))
+			c.logger.Debug("DockerExitCode", hclog.Fmt("attempting to get ExitCode for inst: %s", instUUID))
 		} else {
 			return container.State.ExitCode, nil
 		}
@@ -166,7 +166,7 @@ func (c tritonClient) RunTask(ctx context.Context, dtc *drivers.TaskConfig, cfg 
 		return "", nil, err
 	}
 
-	if input.apitype == "cloudapi" {
+	if input.apitype == APITypeCloud {
 		i, err := cmpt.Instances().Create(ctx, input.tritonInput)
 		if err != nil {
 			return "", nil, err
@@ -183,7 +183,7 @@ func (c tritonClient) RunTask(ctx context.Context, dtc *drivers.TaskConfig, cfg 
 
 	if input.apitype == APITypeDocker {
 		// If AutoPull is enabled, pull the image.
-		if cfg.Docker.Image.AutoPull == true {
+		if cfg.Docker.Image.AutoPull {
 			err := c.dclient.PullImage(
 				*input.dockerPullImgOpts,
 				*input.dockerAuthConfig,
@@ -230,27 +230,27 @@ func (c tritonClient) RunTask(ctx context.Context, dtc *drivers.TaskConfig, cfg 
 		}
 
 		// Handle Loggings
-		go c.getDockerLogs(ctx, i.ID, dtc)
+		go c.getDockerLogs(ctx, instanceID, dtc)
 
 		// Start the Docker Container
-		c.dclient.StartContainer(i.ID, i.HostConfig)
+		c.dclient.StartContainer(instanceID, i.HostConfig)
 		inst, err := c.WaitForInstState(ctx, cmpt, instanceID, tritonInstanceStatusRunning, 5, 5, false)
 		if err != nil {
 			return "", nil, err
 		}
 		// Handle Initial Template Upload
-		c.UploadTemplates(ctx, i.ID, dtc)
+		c.UploadTemplates(ctx, instanceID, dtc)
 
 		primaryIP = inst.PrimaryIP
 	}
 
 	// Enable Deletion Protection if true
-	if cfg.DeletionProtection == true {
+	if cfg.DeletionProtection {
 		err := cmpt.Instances().EnableDeletionProtection(ctx, &compute.EnableDeletionProtectionInput{
-			InstanceID: instanceID,
+			InstanceID: toInstanceUUID(instanceID),
 		})
 		if err != nil {
-			return "", nil, errors.New("Failed to Apply Deletion-Protection")
+			return "", nil, errors.New("failed to apply Deletion-Protection")
 		}
 	}
 
@@ -332,7 +332,7 @@ func (c tritonClient) UploadTemplates(ctx context.Context, id string, dtc *drive
 			})
 			if err != nil {
 				if current > timeout {
-					return fmt.Errorf("Timeout exceeded while Uploading Templates Inst: %s.", id)
+					return fmt.Errorf("timeout exceeded while uploading templates to inst: %s", id)
 				}
 				time.Sleep(time.Duration(interval) + time.Second)
 				current = current + interval
@@ -427,7 +427,7 @@ func (c tritonClient) buildTaskInput(ctx context.Context, dtc *drivers.TaskConfi
 	// An Instance must be for CloudAPI or DockerAPI.  Check to make sure both are not configured
 	// in our hclConfig.  Images must be provided for both APIs so we can use that to compare
 	if cfg.Cloud.Image.Name != "" && cfg.Docker.Image.Name != "" {
-		return nil, fmt.Errorf("triton driver config can only deploy to either CloudAPI or Docker.")
+		return nil, fmt.Errorf("triton driver config can only deploy to either CloudAPI or Docker")
 	}
 
 	if dtc.JobType == JobTypeBatch && cfg.Cloud.Image.Name != "" {
@@ -488,7 +488,7 @@ func (c tritonClient) buildCloudAPIInput(ctx context.Context, dtc *drivers.TaskC
 
 	// Handle CNS
 	if len(cfg.CNS) > 0 {
-		cfg.Tags["triton.cns.services"] = fmt.Sprintf(strings.Join(cfg.CNS, ","))
+		cfg.Tags["triton.cns.services"] = fmt.Sprint(strings.Join(cfg.CNS, ","))
 	}
 
 	// Make Name Reflect the Nomad Spec
@@ -570,7 +570,7 @@ func (c tritonClient) buildDockerAPIInput(ctx context.Context, dtc *drivers.Task
 
 	// Handle CNS
 	if len(cfg.CNS) > 0 {
-		labels["triton.cns.services"] = fmt.Sprintf(strings.Join(cfg.CNS, ","))
+		labels["triton.cns.services"] = fmt.Sprint(strings.Join(cfg.CNS, ","))
 	}
 
 	// Make Name Reflect the Nomad Spec
@@ -623,7 +623,7 @@ func (c tritonClient) buildDockerAPIInput(ctx context.Context, dtc *drivers.Task
 	var pullImgOpts docker.PullImageOptions
 	var authConfig docker.AuthConfiguration
 
-	if cfg.Docker.Image.AutoPull == true {
+	if cfg.Docker.Image.AutoPull {
 		pullImgOpts = docker.PullImageOptions{
 			Repository: cfg.Docker.Image.Name,
 			Tag:        cfg.Docker.Image.Tag,
@@ -721,7 +721,7 @@ func (c tritonClient) RebootTask(ctx context.Context, instUUID string, dtc *driv
 			AllocID:        dtc.AllocID,
 			Timestamp:      time.Now(),
 			DisplayMessage: fmt.Sprintf("RebootTask: Instance %s is rebooting.", instUUID),
-			Message:        fmt.Sprintf("RebootTask"),
+			Message:        "RebootTask",
 			Annotations:    annotations,
 		})
 
@@ -767,10 +767,10 @@ func (c tritonClient) getPackage(p Package) (*compute.Package, error) {
 	}
 
 	if len(pkg) > 1 {
-		return nil, fmt.Errorf("More than 1 Package found, Please be more specific in your search criteria")
+		return nil, fmt.Errorf("more than 1 package found, please be more specific in your search criteria")
 	}
 	if len(pkg) == 0 {
-		return nil, fmt.Errorf("No Package found, Please be more specific in your search criteria")
+		return nil, fmt.Errorf("no package found, please be more specific in your search criteria")
 	}
 
 	return pkg[0], nil
@@ -843,8 +843,8 @@ func (c *tritonClient) getImage(i CloudImage) (string, error) {
 
 	var image *compute.Image
 	if len(images) == 0 {
-		return "", fmt.Errorf("Your image query returned no results. Please change " +
-			"your search criteria and try again.")
+		return "", fmt.Errorf("your image query returned no results, please change " +
+			"your search criteria and try again")
 	}
 
 	if len(images) > 1 {
@@ -853,8 +853,8 @@ func (c *tritonClient) getImage(i CloudImage) (string, error) {
 		if recent {
 			image = mostRecentImages(images)
 		} else {
-			return "", fmt.Errorf("Your image query returned more than one result. " +
-				"Please try a more specific image search criteria.")
+			return "", fmt.Errorf("your image query returned more than one result, " +
+				"please try a more specific image search criteria")
 		}
 	} else {
 		image = images[0]
@@ -972,7 +972,7 @@ func (c tritonClient) WaitForInstState(ctx context.Context, cmpt *compute.Comput
 			}
 			if err != nil {
 				if current > timeout {
-					errMsg := fmt.Errorf("Timeout exceeded while waiting for Inst: %s to be State: %s", uuid, state)
+					errMsg := fmt.Errorf("timeout exceeded while waiting for inst: %s to be in state: %s", uuid, state)
 					return nil, errMsg
 				}
 				time.Sleep(time.Duration(interval) * time.Second)
@@ -991,7 +991,7 @@ func (c tritonClient) WaitForInstState(ctx context.Context, cmpt *compute.Comput
 				return instance, nil
 			}
 			if current > timeout {
-				errMsg := fmt.Errorf("Timeout exceeded while waiting for Inst: %s to be State: %s", uuid, state)
+				errMsg := fmt.Errorf("timeout exceeded while waiting for inst: %s to be in state: %s", uuid, state)
 				return nil, errMsg
 			}
 			time.Sleep(time.Duration(interval) * time.Second)

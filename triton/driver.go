@@ -668,5 +668,5 @@ func (d *Driver) SignalTask(taskID string, signal string) error {
 func (d *Driver) ExecTask(taskID string, cmd []string, timeout time.Duration) (*drivers.ExecTaskResult, error) {
 	d.logger.Info("Inside ExecTask")
 	// driver specific logic to execute commands in a task.
-	return nil, fmt.Errorf("Triton driver does not support exec")
+	return nil, fmt.Errorf("triton driver does not support exec")
 }
