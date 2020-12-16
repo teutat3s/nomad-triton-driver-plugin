@@ -440,7 +440,7 @@ func (c tritonClient) buildTaskInput(ctx context.Context, dtc *drivers.TaskConfi
 
 	// Build Inputs. No Instance Provisioning or Image Pulling takes place here.
 	if cfg.Cloud.Image.Name != "" {
-		i, err := c.buiuldCloudAPIInput(ctx, dtc, cfg)
+		i, err := c.buildCloudAPIInput(ctx, dtc, cfg)
 		if err != nil {
 			return nil, err
 		}
@@ -458,7 +458,7 @@ func (c tritonClient) buildTaskInput(ctx context.Context, dtc *drivers.TaskConfi
 	return input, nil
 }
 
-func (c tritonClient) buiuldCloudAPIInput(ctx context.Context, dtc *drivers.TaskConfig, cfg TaskConfig) (*tritonInstanceInput, error) {
+func (c tritonClient) buildCloudAPIInput(ctx context.Context, dtc *drivers.TaskConfig, cfg TaskConfig) (*tritonInstanceInput, error) {
 	c.logger.Info("building input for CloudAPI")
 
 	// Handle Environment Variables and Metadata
