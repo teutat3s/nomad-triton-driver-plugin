@@ -39,7 +39,7 @@ const (
 	DockerRestartOnFailure = "OnFailure"
 )
 
-// tritonClientInterface encapsulates all the required AWS functionality to
+// tritonClientInterface encapsulates all the required TritonDataCenter functionality to
 // successfully run tasks via this plugin.
 type tritonClientInterface interface {
 
@@ -54,7 +54,7 @@ type tritonClientInterface interface {
 	// DockerExitCode attempts to return the ExitCode of a Docker Container
 	DockerExitCode(ctx context.Context, instUUID string) (int, error)
 
-	// UploadTemplates attempts to return the ExitCode of a Docker Container
+	// UploadTemplates is used to upload templated files to a Docker Container
 	UploadTemplates(ctx context.Context, instUUID string, dtc *drivers.TaskConfig) error
 
 	// RunTask is used to trigger the running of a new Triton instance based on the
@@ -65,13 +65,13 @@ type tritonClientInterface interface {
 	// StopTask stops the running Triton Instance
 	StopTask(ctx context.Context, instUUID string) error
 
-	// DestroyTask stops the running Triton Instance
+	// DestroyTask destroys the running Triton Instance
 	DestroyTask(ctx context.Context, instUUID string) error
 
-	// DestroyTask stops the running Triton Instance
+	// RebootTask reboots the running Triton Instance
 	RebootTask(ctx context.Context, instUUID string, dtc *drivers.TaskConfig) error
 
-	// WaitForInstState is used to wait for an instance to be a desired state
+	// WaitForInstState is used to wait for an instance to be in a desired state
 	WaitForInstState(ctx context.Context, cmpt *compute.ComputeClient, id string, state string, timeout int, interval int, execute bool) (*compute.Instance, error)
 }
 
@@ -150,7 +150,7 @@ func (c tritonClient) DockerExitCode(ctx context.Context, instUUID string) (int,
 func (c tritonClient) RunTask(ctx context.Context, dtc *drivers.TaskConfig, cfg TaskConfig) (string, *drivers.DriverNetwork, error) {
 	c.logger.Info("In_RunTask")
 
-	// instanceID Is used for query a deployed instance for both dockerapi and cloudapi
+	// instanceID is used for querying a deployed instance for both dockerapi and cloudapi
 	var instanceID string
 	// primaryIP is used for advertising the instance address via DriverNetwork
 	var primaryIP string
@@ -160,7 +160,7 @@ func (c tritonClient) RunTask(ctx context.Context, dtc *drivers.TaskConfig, cfg 
 		return "", nil, err
 	}
 
-	// Init compute client to communicate to Triton
+	// Init compute client to communicate with Triton
 	cmpt, err := c.tclient.Compute()
 	if err != nil {
 		return "", nil, err
