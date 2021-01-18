@@ -48,7 +48,7 @@ job "redis" {
 
           labels {
             group         = "webservice-cache"
-            bob           = "label"
+            bob.bill.john = "label"
             test          = "test"
           }
 

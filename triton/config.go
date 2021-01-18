@@ -147,7 +147,7 @@ var (
 	})
 )
 
-// Config contains configuration information for the plugin
+// DriverConfig contains configuration information for the plugin
 type DriverConfig struct {
 	// decoded plugin configuration struct
 	//
