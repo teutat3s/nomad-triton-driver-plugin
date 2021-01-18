@@ -8,6 +8,6 @@ plugin "triton-driver" {
 
 client {
   options = {
-    "driver.whitelist" = "triton"
+    "driver.allowlist" = "triton"
   }
 }
