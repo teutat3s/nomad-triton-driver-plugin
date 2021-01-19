@@ -1,4 +1,15 @@
-### Nomad Config Inputs
+### Nomad Driver Plugin Config Inputs
+```
+	configSpec = hclspec.NewObject(map[string]*hclspec.Spec{
+		"enabled":   hclspec.NewAttr("enabled", "bool", false),
+		"cloudapi":  hclspec.NewAttr("cloudapi", "bool", false),
+		"dockerapi": hclspec.NewAttr("dockerapi", "bool", false),
+		"cluster":   hclspec.NewAttr("cluster", "string", false),
+		"region":    hclspec.NewAttr("region", "string", false),
+	})
+```
+
+### Nomad Task Config Inputs
 ```
 	taskConfigSpec = hclspec.NewObject(map[string]*hclspec.Spec{
 		"docker_api": hclspec.NewBlock("docker_api", false, hclspec.NewObject(map[string]*hclspec.Spec{
@@ -61,7 +72,6 @@
 			"name":    hclspec.NewAttr("name", "string", false),
 			"version": hclspec.NewAttr("version", "string", false),
 		})),
-		"exit_strategy": hclspec.NewAttr("exit_strategy", "string", false),
 	})
 ```
 
@@ -477,9 +487,4 @@ package {
   name = "sample-512M"
   version = "0.0.1"
 }
-```
-#### exit_strategy _string_
-A string specifying the desired exit strategy for the nomad task. Can be either "stopped" or "deleted".  Defaults to "stopped".
-```
-exit_stratey = "deleted"
 ```
