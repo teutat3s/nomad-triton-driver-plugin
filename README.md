@@ -1,12 +1,19 @@
 ![Go tests](https://github.com/teutat3s/nomad-triton-driver-plugin/workflows/Go%20tests/badge.svg)
 
+### Quick start
 ```sh
-$ git clone https://github.com/teutat3s/nomad-triton-driver-plugin
+# Clone the repo and build the driver
+git clone https://github.com/teutat3s/nomad-triton-driver-plugin
+cd nomad-triton-driver-plugin
+make build
 
-$ cd nomad-triton-driver-plugin
+# Get a nomad dev server + client + triton-driver running
+mkdir plugins
+cp triton-driver plugins/
+nomad agent -dev -config=./example/agent.hcl -plugin-dir=$(pwd)/plugins/
 
-$ make build
-go build -o triton-driver .
+# In another shell
+nomad job run -hcl1 example/example-docker.nomad
 ```
 
 ### Original ReadMe
