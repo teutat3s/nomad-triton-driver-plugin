@@ -10,6 +10,7 @@ make build
 # Get a nomad dev server + client + triton-driver running
 mkdir plugins
 cp triton-driver plugins/
+eval "$(triton env $YOUR_PROFILE)" && eval "$(ssh-agent)" && ssh-add
 nomad agent -dev -config=./example/agent.hcl -plugin-dir=$(pwd)/plugins/
 
 # In another shell
