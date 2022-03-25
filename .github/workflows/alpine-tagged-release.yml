@@ -2,7 +2,7 @@ name: Build triton-driver binary on alpine linux and release it
 
 on:
   create:
-    branches: [ master ]
+    branches: [ main ]
 
 jobs:
   prepare:
